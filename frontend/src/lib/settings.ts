@@ -1,6 +1,7 @@
 import { GetDefaults, LoadFonts as LoadFontsFromBackend, LoadSettings, SaveFonts as SaveFontsToBackend, SaveSettings as SaveToBackend, } from "../../wailsjs/go/main/App";
 import { getFirstArtist } from "./utils";
 import { isAppLanguage, t, type AppLanguage } from "@/i18n";
+import { normalizeBaseColorName, normalizeThemeName, type BaseColorName, type ThemeName } from "./themes";
 export type BuiltInFontFamily = "google-sans" | "inter" | "poppins" | "roboto" | "dm-sans" | "plus-jakarta-sans" | "manrope" | "space-grotesk" | "noto-sans" | "nunito-sans" | "figtree" | "raleway" | "public-sans" | "outfit" | "jetbrains-mono" | "geist-sans" | "bricolage-grotesque";
 export type CustomFontFamily = `custom-${string}`;
 export type FontFamily = BuiltInFontFamily | CustomFontFamily;
@@ -18,7 +19,7 @@ export type FontOption = {
 };
 export type FolderPreset = "none" | "artist" | "album" | "year-album" | "year-artist-album" | "artist-album" | "artist-year-album" | "artist-year-nested-album" | "album-artist" | "album-artist-album" | "album-artist-year-album" | "album-artist-year-nested-album" | "year" | "year-artist" | "custom";
 export type FilenamePreset = "title" | "title-artist" | "artist-title" | "track-title" | "track-title-artist" | "track-artist-title" | "title-album-artist" | "track-title-album-artist" | "artist-album-title" | "track-dash-title" | "disc-track-title" | "disc-track-title-artist" | "custom";
-export type ExistingFileCheckMode = "filename" | "isrc";
+export type ExistingFileCheckMode = "filename" | "isrc" | "hybrid";
 export interface MetadataTagToggles {
     title: boolean;
     artist: boolean;
@@ -43,7 +44,8 @@ export interface Settings {
     customQobuzApi: string;
     linkResolver: "songstats" | "songlink";
     allowResolverFallback: boolean;
-    theme: string;
+    baseColor: BaseColorName;
+    theme: ThemeName;
     themeMode: "auto" | "light" | "dark";
     fontFamily: FontFamily;
     customFonts: CustomFontOption[];
@@ -60,8 +62,9 @@ export interface Settings {
     trackNumber: boolean;
     sfxEnabled: boolean;
     embedLyrics: boolean;
-    lyricsTranslationMode: "off" | "copilot" | "gemini";
+    lyricsTranslationMode: "off" | "chatgpt" | "gemini";
     lyricsTranslationLang: string;
+    lyricsTranslationAutoFallback: boolean;
     lrclibTitleFallback: boolean;
     embedMaxQualityCover: boolean;
     operatingSystem: "Windows" | "linux/MacOS";
@@ -90,6 +93,8 @@ export interface Settings {
     autoResampleSampleRate: "44100" | "48000" | "96000" | "192000";
     autoResampleBitDepth: "16" | "24";
     autoResampleDeleteOriginal: boolean;
+    autoReplayGainTags: boolean;
+    autoReplayGainMode: "track" | "album";
     useFirstArtistOnly: boolean;
     useSingleGenre: boolean;
     embedGenre: boolean;
@@ -229,6 +234,7 @@ export const DEFAULT_SETTINGS: Settings = {
     customQobuzApi: "",
     linkResolver: "songlink",
     allowResolverFallback: true,
+    baseColor: "neutral",
     theme: "yellow",
     themeMode: "auto",
     fontFamily: "google-sans",
@@ -245,6 +251,7 @@ export const DEFAULT_SETTINGS: Settings = {
     embedLyrics: false,
     lyricsTranslationMode: "off",
     lyricsTranslationLang: "en",
+    lyricsTranslationAutoFallback: true,
     lrclibTitleFallback: true,
     embedMaxQualityCover: false,
     operatingSystem: detectOS(),
@@ -273,10 +280,12 @@ export const DEFAULT_SETTINGS: Settings = {
     autoResampleSampleRate: "44100",
     autoResampleBitDepth: "16",
     autoResampleDeleteOriginal: false,
+    autoReplayGainTags: false,
+    autoReplayGainMode: "album",
     useFirstArtistOnly: false,
     useSingleGenre: false,
     embedGenre: false,
-    redownloadWithSuffix: true,
+    redownloadWithSuffix: false,
     separator: "semicolon",
     metadataDateFormat: "full",
     metadataTags: {
@@ -648,17 +657,31 @@ function normalizeDownloader(value: unknown): Settings["downloader"] {
     }
     return DEFAULT_SETTINGS.downloader;
 }
+function normalizeLyricsTranslationMode(value: unknown): Settings["lyricsTranslationMode"] {
+    switch (typeof value === "string" ? value.trim().toLowerCase() : "") {
+        case "chatgpt":
+            return "chatgpt";
+        case "gemini":
+            return "gemini";
+        default:
+            return "off";
+    }
+}
 function normalizeExistingFileCheckMode(mode: unknown): ExistingFileCheckMode {
     switch (typeof mode === "string" ? mode.trim().toLowerCase() : "") {
         case "isrc":
         case "upc":
             return "isrc";
+        case "hybrid":
+            return "hybrid";
         default:
             return "filename";
     }
 }
 function normalizeSettingsPayload(settings: SettingsPayload): SettingsPayload {
     const normalized: SettingsPayload = { ...settings };
+    normalized.baseColor = normalizeBaseColorName(settings.baseColor);
+    normalized.theme = normalizeThemeName(settings.theme, normalized.baseColor);
     if ("darkMode" in normalized && !("themeMode" in normalized)) {
         normalized.themeMode = normalized.darkMode ? "dark" : "light";
         delete normalized.darkMode;
@@ -727,7 +750,11 @@ function normalizeSettingsPayload(settings: SettingsPayload): SettingsPayload {
     normalized.customTidalApi = normalizeCustomTidalApi(normalized.customTidalApi);
     normalized.customQobuzApi = normalizeCustomQobuzApi(normalized.customQobuzApi);
     normalized.downloader = normalizeDownloader(normalized.downloader);
+    normalized.lyricsTranslationMode = normalizeLyricsTranslationMode(normalized.lyricsTranslationMode);
     normalized.autoOrder = sanitizeAutoOrder(normalized.autoOrder);
+    if (typeof normalized.lyricsTranslationAutoFallback !== "boolean") {
+        normalized.lyricsTranslationAutoFallback = true;
+    }
     if (!("allowFallback" in normalized)) {
         normalized.allowFallback = true;
     }
@@ -755,6 +782,10 @@ function normalizeSettingsPayload(settings: SettingsPayload): SettingsPayload {
     normalized.showUpdateNotifications = typeof settings.showUpdateNotifications === "boolean" ? settings.showUpdateNotifications : true;
     normalized.previewVolume = normalizePreviewVolume(normalized.previewVolume);
     normalized.existingFileCheckMode = normalizeExistingFileCheckMode(normalized.existingFileCheckMode);
+    normalized.autoReplayGainTags = typeof normalized.autoReplayGainTags === "boolean"
+        ? normalized.autoReplayGainTags
+        : DEFAULT_SETTINGS.autoReplayGainTags;
+    normalized.autoReplayGainMode = normalized.autoReplayGainMode === "track" ? "track" : "album";
     if (!("useFirstArtistOnly" in normalized)) {
         normalized.useFirstArtistOnly = false;
     }

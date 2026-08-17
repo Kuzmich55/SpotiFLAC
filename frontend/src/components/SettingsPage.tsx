@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -7,19 +7,19 @@ import { InputWithContext } from "@/components/ui/input-with-context";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger, } from "@/components/ui/tooltip";
-import { FolderOpen, Save, RotateCcw, Info, ArrowRight, MonitorCog, FolderCog, Router, FolderLock, Plus, Trash2, ExternalLink, PlugZap, Download, Tags, FileSignature, DatabaseBackup, Search } from "lucide-react";
+import { FolderOpen, Save, RotateCcw, CircleHelp, ArrowRight, MonitorCog, FolderCog, Router, FolderLock, Plus, Trash2, ExternalLink, PlugZap, Download, Tags, FileSignature, DatabaseBackup, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { getSettings, getSettingsWithDefaults, loadSettings, saveSettings, resetToDefaultSettings, applyThemeMode, applyFont, getFontOptions, parseGoogleFontUrl, loadGoogleFontUrl, loadCustomFonts, saveCustomFonts, TEMPLATE_VARIABLES, DEFAULT_SETTINGS, sanitizeAutoOrder, type Settings as SettingsType, type MetadataTagToggles, type FontFamily, type CustomFontFamily, type ExistingFileCheckMode, } from "@/lib/settings";
 import { FormatEditor } from "@/components/FormatEditor";
-import { themes, applyTheme } from "@/lib/themes";
+import { baseColors, getThemesForBaseColor, normalizeThemeName, applyTheme, type BaseColorName } from "@/lib/themes";
 import { BackupSettings, RestoreSettings, SelectFolder, OpenConfigFolder, CheckCustomTidalAPI, CheckCustomQobuzAPI } from "../../wailsjs/go/main/App";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
 import { openExternal } from "@/lib/utils";
 import { ApiStatusTab } from "./ApiStatusTab";
 import { AmazonIcon, QobuzIcon, SonglinkIcon, SongstatsIcon, TidalIcon } from "./PlatformIcons";
-import i18n, { APP_LANGUAGES, t, type AppLanguage } from "@/i18n";
-import copilotIcon from "@/assets/icons/copilot.png";
+import i18n, { APP_LANGUAGES, type AppLanguage } from "@/i18n";
+import chatGPTIcon from "@/assets/icons/chatgpt.svg";
 import geminiIcon from "@/assets/icons/gemini.png";
 interface SettingsPageProps {
     onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
@@ -27,6 +27,7 @@ interface SettingsPageProps {
 }
 type CustomTidalApiStatus = "idle" | "checking" | "online" | "offline";
 const AUTO_CONVERT_BITRATES: SettingsType["autoConvertBitrate"][] = ["320k", "256k", "192k", "128k"];
+const THEME_PREVIEW_DEBOUNCE_MS = 50;
 const LYRICS_TRANSLATION_LANGUAGES = [
     { code: "en", labelKey: "translation.sources.english", flag: "gb" },
     { code: "id", labelKey: "translation.sources.indonesian", flag: "id" },
@@ -64,26 +65,26 @@ const LYRICS_TRANSLATION_LANGUAGES = [
 ] as const;
 const METADATA_TAG_OPTIONS: Array<{
     key: keyof MetadataTagToggles;
-    label: string;
+    labelKey: string;
     example: string;
 }> = [
-    { key: "title", label: t("translation.common.title"), example: "Golden" },
-    { key: "artist", label: t("translation.common.artist"), example: "HUNTR/X / EJAE / AUDREY NUNA / REI AMI" },
-    { key: "album", label: t("translation.common.album"), example: "KPop Demon Hunters (Soundtrack from the Netflix Film)" },
-    { key: "albumArtist", label: t("translation.common.albumArtist"), example: "KPop Demon Hunters Cast / HUNTR/X / Saja Boys" },
-    { key: "date", label: t("translation.settings.dateYear"), example: "2025-06-20" },
-    { key: "trackNumber", label: t("translation.settings.trackNumber"), example: "4/12" },
-    { key: "discNumber", label: t("translation.settings.discNumber"), example: "1/1" },
-    { key: "genre", label: t("translation.settings.genre"), example: "K-Pop" },
-    { key: "composer", label: t("translation.settings.composer"), example: "EJAE / Mark Sonnenblick / Joong Gyu Kwak" },
-    { key: "copyright", label: t("translation.common.copyright"), example: "© 2025 Visva Records / Republic Records" },
-    { key: "label", label: t("translation.settings.labelPublisher"), example: "K-Pop Demon Hunters" },
-    { key: "isrc", label: "ISRC", example: "QZ8BZ2513510" },
-    { key: "upc", label: t("literal.common.upc"), example: "00602478398346" },
-    { key: "comment", label: t("translation.settings.comment"), example: "https://open.spotify.com/track/1CPZ5BxNNd0n0nF4Orb9JS" },
+    { key: "title", labelKey: "translation.common.title", example: "Golden" },
+    { key: "artist", labelKey: "translation.common.artist", example: "HUNTR/X / EJAE / AUDREY NUNA / REI AMI" },
+    { key: "album", labelKey: "translation.common.album", example: "KPop Demon Hunters (Soundtrack from the Netflix Film)" },
+    { key: "albumArtist", labelKey: "translation.common.albumArtist", example: "KPop Demon Hunters Cast / HUNTR/X / Saja Boys" },
+    { key: "date", labelKey: "translation.settings.dateYear", example: "2025-06-20" },
+    { key: "trackNumber", labelKey: "translation.settings.trackNumber", example: "4/12" },
+    { key: "discNumber", labelKey: "translation.settings.discNumber", example: "1/1" },
+    { key: "genre", labelKey: "translation.settings.genre", example: "K-Pop" },
+    { key: "composer", labelKey: "translation.settings.composer", example: "EJAE / Mark Sonnenblick / Joong Gyu Kwak" },
+    { key: "copyright", labelKey: "translation.common.copyright", example: "© 2025 Visva Records / Republic Records" },
+    { key: "label", labelKey: "translation.settings.labelPublisher", example: "K-Pop Demon Hunters" },
+    { key: "isrc", labelKey: "literal.common.isrc", example: "QZ8BZ2513510" },
+    { key: "upc", labelKey: "literal.common.upc", example: "00602478398346" },
+    { key: "comment", labelKey: "translation.settings.comment", example: "https://open.spotify.com/track/1CPZ5BxNNd0n0nF4Orb9JS" },
 ];
 export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: SettingsPageProps) {
-    useTranslation();
+    const { t } = useTranslation();
     const [savedSettings, setSavedSettings] = useState<SettingsType>(getSettings());
     const [tempSettings, setTempSettings] = useState<SettingsType>(savedSettings);
     const [isDark, setIsDark] = useState(document.documentElement.classList.contains("dark"));
@@ -101,7 +102,13 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
     const [customQobuzApiStatus, setCustomQobuzApiStatus] = useState<CustomTidalApiStatus>("idle");
     const parsedAddFont = parseGoogleFontUrl(addFontUrl);
     const fontOptions = getFontOptions(tempSettings.customFonts);
+    const availableThemes = getThemesForBaseColor(tempSettings.baseColor);
     const hasUnsavedChanges = JSON.stringify(savedSettings) !== JSON.stringify(tempSettings);
+    const themePreviewTimerRef = useRef<number | null>(null);
+    const selectedThemeConfigRef = useRef({
+        baseColor: tempSettings.baseColor,
+        theme: tempSettings.theme,
+    });
     const normalizedLyricsLanguageSearch = lyricsLanguageSearch.trim().toLocaleLowerCase();
     const filteredLyricsTranslationLanguages = normalizedLyricsLanguageSearch
         ? LYRICS_TRANSLATION_LANGUAGES.filter((language) => language.code.includes(normalizedLyricsLanguageSearch)
@@ -114,13 +121,68 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
     const isAtmosSelected = (effectiveDownloader === "tidal" && tempSettings.tidalQuality === "ATMOS") ||
         (effectiveDownloader === "amazon" && tempSettings.amazonQuality === "atmos") ||
         (effectiveDownloader === "auto" && tempSettings.autoQuality === "atmos");
+    const cancelThemePreview = useCallback(() => {
+        if (themePreviewTimerRef.current !== null) {
+            window.clearTimeout(themePreviewTimerRef.current);
+            themePreviewTimerRef.current = null;
+        }
+    }, []);
+    const previewThemeConfig = useCallback((themeName: SettingsType["theme"], baseColorName: BaseColorName) => {
+        cancelThemePreview();
+        themePreviewTimerRef.current = window.setTimeout(() => {
+            themePreviewTimerRef.current = null;
+            applyTheme(themeName, baseColorName);
+        }, THEME_PREVIEW_DEBOUNCE_MS);
+    }, [cancelThemePreview]);
+    const previewTheme = useCallback((themeName: SettingsType["theme"]) => {
+        previewThemeConfig(themeName, selectedThemeConfigRef.current.baseColor);
+    }, [previewThemeConfig]);
+    const previewBaseColor = useCallback((baseColorName: BaseColorName) => {
+        const themeName = normalizeThemeName(selectedThemeConfigRef.current.theme, baseColorName);
+        previewThemeConfig(themeName, baseColorName);
+    }, [previewThemeConfig]);
+    const restoreSelectedTheme = useCallback(() => {
+        cancelThemePreview();
+        const selectedTheme = selectedThemeConfigRef.current;
+        applyTheme(selectedTheme.theme, selectedTheme.baseColor);
+    }, [cancelThemePreview]);
+    const handleThemeChange = useCallback((themeName: SettingsType["theme"]) => {
+        cancelThemePreview();
+        const baseColorName = selectedThemeConfigRef.current.baseColor;
+        selectedThemeConfigRef.current = { baseColor: baseColorName, theme: themeName };
+        applyTheme(themeName, baseColorName);
+        setTempSettings((prev) => ({ ...prev, theme: themeName }));
+    }, [cancelThemePreview]);
+    const handleBaseColorChange = useCallback((baseColorName: BaseColorName) => {
+        cancelThemePreview();
+        const themeName = normalizeThemeName(selectedThemeConfigRef.current.theme, baseColorName);
+        selectedThemeConfigRef.current = { baseColor: baseColorName, theme: themeName };
+        applyTheme(themeName, baseColorName);
+        setTempSettings((prev) => ({ ...prev, baseColor: baseColorName, theme: themeName }));
+    }, [cancelThemePreview]);
     const resetToSaved = useCallback(() => {
+        cancelThemePreview();
         const freshSavedSettings = getSettings();
+        selectedThemeConfigRef.current = {
+            baseColor: freshSavedSettings.baseColor,
+            theme: freshSavedSettings.theme,
+        };
         flushSync(() => {
             setTempSettings(freshSavedSettings);
             setIsDark(document.documentElement.classList.contains("dark"));
         });
-    }, []);
+    }, [cancelThemePreview]);
+    useEffect(() => {
+        selectedThemeConfigRef.current = {
+            baseColor: tempSettings.baseColor,
+            theme: tempSettings.theme,
+        };
+    }, [tempSettings.baseColor, tempSettings.theme]);
+    useEffect(() => () => {
+        cancelThemePreview();
+        const persistedSettings = getSettings();
+        applyTheme(persistedSettings.theme, persistedSettings.baseColor);
+    }, [cancelThemePreview]);
     useEffect(() => {
         if (onResetRequest) {
             onResetRequest(resetToSaved);
@@ -134,25 +196,25 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
     }, [tempSettings.language]);
     useEffect(() => {
         applyThemeMode(savedSettings.themeMode);
-        applyTheme(savedSettings.theme);
+        applyTheme(savedSettings.theme, savedSettings.baseColor);
         const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
         const handleChange = () => {
             if (savedSettings.themeMode === "auto") {
                 applyThemeMode("auto");
-                applyTheme(savedSettings.theme);
+                applyTheme(savedSettings.theme, savedSettings.baseColor);
             }
         };
         mediaQuery.addEventListener("change", handleChange);
         return () => mediaQuery.removeEventListener("change", handleChange);
-    }, [savedSettings.themeMode, savedSettings.theme]);
+    }, [savedSettings.themeMode, savedSettings.baseColor, savedSettings.theme]);
     useEffect(() => {
         applyThemeMode(tempSettings.themeMode);
-        applyTheme(tempSettings.theme);
+        applyTheme(tempSettings.theme, tempSettings.baseColor);
         applyFont(tempSettings.fontFamily, tempSettings.customFonts);
         setTimeout(() => {
             setIsDark(document.documentElement.classList.contains("dark"));
         }, 0);
-    }, [tempSettings.themeMode, tempSettings.theme, tempSettings.fontFamily, tempSettings.customFonts]);
+    }, [tempSettings.themeMode, tempSettings.baseColor, tempSettings.theme, tempSettings.fontFamily, tempSettings.customFonts]);
     useEffect(() => {
         if (showAddFontDialog && parsedAddFont) {
             loadGoogleFontUrl(parsedAddFont.url, "spotiflac-add-font-preview");
@@ -192,7 +254,7 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
         setTempSettings(defaultSettings);
         setSavedSettings(defaultSettings);
         applyThemeMode(defaultSettings.themeMode);
-        applyTheme(defaultSettings.theme);
+        applyTheme(defaultSettings.theme, defaultSettings.baseColor);
         applyFont(defaultSettings.fontFamily, defaultSettings.customFonts);
         await i18n.changeLanguage(defaultSettings.language);
         setShowResetConfirm(false);
@@ -248,7 +310,7 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
             setTempSettings(restoredSettings);
             await i18n.changeLanguage(restoredSettings.language);
             applyThemeMode(restoredSettings.themeMode);
-            applyTheme(restoredSettings.theme);
+            applyTheme(restoredSettings.theme, restoredSettings.baseColor);
             applyFont(restoredSettings.fontFamily, restoredSettings.customFonts);
             setShowBackupDialog(false);
             toast.success(t("translation.settings.restoreSettingsSuccess"));
@@ -457,33 +519,64 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="theme-mode">{t("translation.settings.mode")}</Label>
-                <Select value={tempSettings.themeMode} onValueChange={(value: "auto" | "light" | "dark") => setTempSettings((prev) => ({ ...prev, themeMode: value }))}>
-                  <SelectTrigger id="theme-mode">
-                    <SelectValue placeholder={t("translation.settings.selectThemeMode")}/>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">{t("translation.settings.auto")}</SelectItem>
-                    <SelectItem value="light">{t("translation.settings.light")}</SelectItem>
-                    <SelectItem value="dark">{t("translation.settings.dark")}</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-[8rem_8rem] gap-4">
+                <div className="min-w-0 space-y-2">
+                  <Label htmlFor="theme-mode">{t("translation.settings.mode")}</Label>
+                  <Select value={tempSettings.themeMode} onValueChange={(value: "auto" | "light" | "dark") => setTempSettings((prev) => ({ ...prev, themeMode: value }))}>
+                    <SelectTrigger id="theme-mode" className="w-full">
+                      <SelectValue placeholder={t("translation.settings.selectThemeMode")}/>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">{t("translation.settings.auto")}</SelectItem>
+                      <SelectItem value="light">{t("translation.settings.light")}</SelectItem>
+                      <SelectItem value="dark">{t("translation.settings.dark")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="min-w-0 space-y-2">
+                  <Label htmlFor="base-color">{t("translation.settings.baseColor")}</Label>
+                  <Select value={tempSettings.baseColor} onValueChange={(value) => handleBaseColorChange(value as BaseColorName)} onOpenChange={(open) => {
+                if (!open) {
+                    restoreSelectedTheme();
+                }
+            }}>
+                    <SelectTrigger id="base-color" className="w-full">
+                      <SelectValue placeholder={t("translation.settings.selectBaseColor")}/>
+                    </SelectTrigger>
+                    <SelectContent onMouseLeave={restoreSelectedTheme}>
+                      {baseColors.map((baseColor) => (<SelectItem key={baseColor.name} value={baseColor.name} onMouseMove={() => previewBaseColor(baseColor.name)} onFocus={() => previewBaseColor(baseColor.name)}>
+                          <span className="flex items-center gap-2">
+                            <span className="w-3 h-3 rounded-full border border-border" style={{
+                    backgroundColor: isDark
+                        ? baseColor.cssVars.dark["muted-foreground"]
+                        : baseColor.cssVars.light["muted-foreground"],
+                }}/>
+                            {baseColor.label}
+                          </span>
+                        </SelectItem>))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="theme">{t("translation.settings.accent")}</Label>
-                <Select value={tempSettings.theme} onValueChange={(value) => setTempSettings((prev) => ({ ...prev, theme: value }))}>
-                  <SelectTrigger id="theme">
+                <Label htmlFor="theme">{t("translation.settings.theme")}</Label>
+                <Select value={tempSettings.theme} onValueChange={(value) => handleThemeChange(value as SettingsType["theme"])} onOpenChange={(open) => {
+                if (!open) {
+                    restoreSelectedTheme();
+                }
+            }}>
+                  <SelectTrigger id="theme" className="w-32">
                     <SelectValue placeholder={t("translation.settings.selectTheme")}/>
                   </SelectTrigger>
-                  <SelectContent>
-                    {themes.map((theme) => (<SelectItem key={theme.name} value={theme.name}>
+                  <SelectContent onMouseLeave={restoreSelectedTheme}>
+                    {availableThemes.map((theme) => (<SelectItem key={theme.name} value={theme.name} onMouseMove={() => previewTheme(theme.name)} onFocus={() => previewTheme(theme.name)}>
                         <span className="flex items-center gap-2">
                           <span className="w-3 h-3 rounded-full border border-border" style={{
                     backgroundColor: isDark
-                        ? theme.cssVars.dark.primary
-                        : theme.cssVars.light.primary,
+                        ? theme.cssVars.dark[theme.name === tempSettings.baseColor ? "muted-foreground" : "primary"]
+                        : theme.cssVars.light[theme.name === tempSettings.baseColor ? "muted-foreground" : "primary"],
                 }}/>
                           {theme.label}
                         </span>
@@ -656,7 +749,7 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
                   <Label className="text-base font-semibold">{t("translation.sources.community")}</Label>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help"/>
+                      <CircleHelp className="h-3.5 w-3.5 text-muted-foreground cursor-help"/>
                     </TooltipTrigger>
                     <TooltipContent side="top">
                       <p className="text-xs whitespace-nowrap">{t("translation.migrated.SettingsPage.1Track30s")}</p>
@@ -1023,7 +1116,7 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
 
             <div className="space-y-6 lg:pl-0">
               <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-muted-foreground">{t("translation.settings.conversion")}</h3>
+                <h3 className="text-sm font-semibold text-muted-foreground">{t("translation.settings.audioProcessing")}</h3>
                 <div className="flex items-center gap-3">
                   <Switch id="auto-convert-audio" checked={tempSettings.autoConvertAudio} onCheckedChange={(checked) => setTempSettings((prev) => ({ ...prev, autoConvertAudio: checked }))}/>
                   <Label htmlFor="auto-convert-audio" className="text-sm font-normal cursor-pointer">{t("translation.settings.autoConvertAudio")}</Label>
@@ -1055,6 +1148,22 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
                   </div>
                   <div className="flex items-center gap-3"><Switch id="auto-resample-delete-original" checked={tempSettings.autoResampleDeleteOriginal} onCheckedChange={(checked) => setTempSettings((prev) => ({ ...prev, autoResampleDeleteOriginal: checked }))}/><Label htmlFor="auto-resample-delete-original" className="text-sm font-normal cursor-pointer">{t("translation.settings.deleteOriginalFileAfterResample")}</Label></div>
                 </div>)}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Switch id="auto-replaygain-tags" checked={tempSettings.autoReplayGainTags} onCheckedChange={(checked) => setTempSettings((prev) => ({ ...prev, autoReplayGainTags: checked }))}/>
+                    <Label htmlFor="auto-replaygain-tags" className="cursor-pointer text-sm font-normal">{t("translation.settings.autoWriteReplayGainTags")}</Label>
+                  </div>
+                  {tempSettings.autoReplayGainTags && (<div className="max-w-xs space-y-2 pl-7">
+                    <Label htmlFor="auto-replaygain-mode">{t("translation.settings.replayGainMode")}</Label>
+                    <Select value={tempSettings.autoReplayGainMode} onValueChange={(value: SettingsType["autoReplayGainMode"]) => setTempSettings((prev) => ({ ...prev, autoReplayGainMode: value }))}>
+                      <SelectTrigger id="auto-replaygain-mode"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="track">{t("translation.settings.replayGainTrackMode")}</SelectItem>
+                        <SelectItem value="album">{t("translation.settings.replayGainAlbumMode")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>)}
+                </div>
               </div>
 
               <div className="space-y-4">
@@ -1088,7 +1197,7 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
                 {column.map((option) => (<div key={option.key} className="flex min-w-0 items-center gap-3 overflow-hidden py-2">
                   <Switch id={`metadata-tag-${option.key}`} checked={tempSettings.metadataTags[option.key]} onCheckedChange={(checked) => setTempSettings((prev) => ({ ...prev, metadataTags: { ...prev.metadataTags, [option.key]: checked } }))}/>
                   <Label htmlFor={`metadata-tag-${option.key}`} className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-1 overflow-hidden text-sm font-normal">
-                    <span className="shrink-0">{option.label}</span>
+                    <span className="shrink-0">{t(option.labelKey)}</span>
                     <span className="min-w-0 flex-1 truncate text-muted-foreground">(e.g. {option.example})</span>
                   </Label>
                 </div>))}
@@ -1286,35 +1395,41 @@ export function SettingsPage({ onUnsavedChangesChange, onResetRequest, }: Settin
                 <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="off">{t("translation.sources.translationOff")}</SelectItem>
-                  <SelectItem value="copilot"><span className="flex items-center gap-2"><img src={copilotIcon} alt="" className="h-4 w-4 object-contain"/>{t("translation.sources.microsoftCopilot")}</span></SelectItem>
+                  <SelectItem value="chatgpt"><span className="flex items-center gap-2"><img src={chatGPTIcon} alt="" className="h-4 w-4 object-contain brightness-0 dark:invert"/>{t("translation.sources.chatGPT")}</span></SelectItem>
                   <SelectItem value="gemini"><span className="flex items-center gap-2"><img src={geminiIcon} alt="" className="h-4 w-4 object-contain"/>{t("translation.sources.googleGemini")}</span></SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {tempSettings.lyricsTranslationMode !== "off" && (<div className="space-y-2">
-              <Label>{t("translation.sources.translationLanguage")}</Label>
-              <Select value={tempSettings.lyricsTranslationLang} onValueChange={(value) => setTempSettings((prev) => ({ ...prev, lyricsTranslationLang: value }))} onOpenChange={(open) => {
+            {tempSettings.lyricsTranslationMode !== "off" && (<>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="lyrics-translation-auto-fallback" className="cursor-pointer">{t("translation.sources.translationAutoFallback")}</Label>
+                <Switch id="lyrics-translation-auto-fallback" checked={tempSettings.lyricsTranslationAutoFallback} onCheckedChange={(checked) => setTempSettings((prev) => ({ ...prev, lyricsTranslationAutoFallback: checked }))}/>
+              </div>
+              <div className="space-y-2">
+                <Label>{t("translation.sources.translationLanguage")}</Label>
+                <Select value={tempSettings.lyricsTranslationLang} onValueChange={(value) => setTempSettings((prev) => ({ ...prev, lyricsTranslationLang: value }))} onOpenChange={(open) => {
                 if (!open)
                     setLyricsLanguageSearch("");
             }}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent className="max-h-56">
-                  <div className="sticky top-0 z-10 bg-popover p-1" onKeyDown={(event) => event.stopPropagation()}>
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"/>
-                      <Input value={lyricsLanguageSearch} onChange={(event) => setLyricsLanguageSearch(event.target.value)} placeholder={t("translation.sources.searchLanguage")} className="h-8 pl-8" autoFocus/>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent className="max-h-56">
+                    <div className="sticky top-0 z-10 bg-popover p-1" onKeyDown={(event) => event.stopPropagation()}>
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"/>
+                        <Input value={lyricsLanguageSearch} onChange={(event) => setLyricsLanguageSearch(event.target.value)} placeholder={t("translation.sources.searchLanguage")} className="h-8 pl-8" autoFocus/>
+                      </div>
                     </div>
-                  </div>
-                  {filteredLyricsTranslationLanguages.map((language) => (<SelectItem key={language.code} value={language.code} textValue={t(language.labelKey)}>
-                    <span className="flex items-center gap-2">
-                      <img src={`/assets/flags/${language.flag}.svg`} alt="" className="h-3 w-4 shrink-0 rounded-[1px] object-cover"/>
-                      {t(language.labelKey)}
-                    </span>
-                  </SelectItem>))}
-                  {filteredLyricsTranslationLanguages.length === 0 && (<div className="px-2 py-6 text-center text-sm text-muted-foreground">{t("translation.sources.noLanguageFound")}</div>)}
-                </SelectContent>
-              </Select>
-            </div>)}
+                    {filteredLyricsTranslationLanguages.map((language) => (<SelectItem key={language.code} value={language.code} textValue={t(language.labelKey)}>
+                      <span className="flex items-center gap-2">
+                        <img src={`/assets/flags/${language.flag}.svg`} alt="" className="h-3 w-4 shrink-0 rounded-[1px] object-cover"/>
+                        {t(language.labelKey)}
+                      </span>
+                    </SelectItem>))}
+                    {filteredLyricsTranslationLanguages.length === 0 && (<div className="px-2 py-6 text-center text-sm text-muted-foreground">{t("translation.sources.noLanguageFound")}</div>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>)}
           </div>
           <DialogFooter>
             <Button onClick={() => setShowLyricsAdvanced(false)}>{t("translation.common.close")}</Button>

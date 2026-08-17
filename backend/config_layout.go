@@ -6,15 +6,15 @@ import (
 	"sort"
 )
 
-const ConfigLayoutVersion = 5
+const ConfigLayoutVersion = 7
 
 var configSections = []struct {
 	Page, Section string
 	Keys          []string
 }{
-	{"settingsPage", "general", []string{"downloadPath", "language", "theme", "themeMode", "fontFamily", "operatingSystem", "sfxEnabled", "previewVolume", "showUpdateNotifications"}},
+	{"settingsPage", "general", []string{"downloadPath", "language", "baseColor", "theme", "themeMode", "fontFamily", "operatingSystem", "sfxEnabled", "previewVolume", "showUpdateNotifications"}},
 	{"settingsPage", "naming", []string{"folderPreset", "folderTemplate", "applyFolderToSingleTrack", "filenamePreset", "filenameTemplate", "albumFilenameTemplate", "useSeparateAlbumFilename", "trackNumber"}},
-	{"settingsPage", "fileManagement", []string{"createPlaylistFolder", "playlistOwnerFolderName", "createM3u8File", "saveCover", "exportLogsFile", "exportLogsOnlyFailed", "autoConvertAudio", "autoConvertFormat", "autoConvertBitrate", "autoConvertDeleteOriginal", "autoResampleAudio", "autoResampleSampleRate", "autoResampleBitDepth", "autoResampleDeleteOriginal", "redownloadWithSuffix", "existingFileCheckMode", "metadataDateFormat", "metadataTags"}},
+	{"settingsPage", "fileManagement", []string{"createPlaylistFolder", "playlistOwnerFolderName", "createM3u8File", "saveCover", "exportLogsFile", "exportLogsOnlyFailed", "autoConvertAudio", "autoConvertFormat", "autoConvertBitrate", "autoConvertDeleteOriginal", "autoResampleAudio", "autoResampleSampleRate", "autoResampleBitDepth", "autoResampleDeleteOriginal", "autoReplayGainTags", "autoReplayGainMode", "redownloadWithSuffix", "existingFileCheckMode", "metadataDateFormat", "metadataTags"}},
 	{"settingsPage", "metadata", []string{"embedLyrics", "embedMaxQualityCover", "useFirstArtistOnly", "useSingleGenre", "embedGenre", "separator"}},
 	{"workflowPage", "mode", []string{"downloader", "autoQuality", "allowFallback"}},
 	{"workflowPage", "ordering", []string{"autoOrder"}},
@@ -46,7 +46,13 @@ func FlattenConfigSettings(config map[string]interface{}) map[string]interface{}
 	flat := make(map[string]interface{})
 	var visit func(map[string]interface{})
 	visit = func(values map[string]interface{}) {
-		for key, value := range values {
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value := values[key]
 			if key == "configVersion" {
 				continue
 			}
@@ -62,6 +68,16 @@ func FlattenConfigSettings(config map[string]interface{}) map[string]interface{}
 		}
 	}
 	visit(config)
+
+	for _, definition := range configSections {
+		page, _ := config[definition.Page].(map[string]interface{})
+		section, _ := page[definition.Section].(map[string]interface{})
+		for _, key := range definition.Keys {
+			if value, exists := section[key]; exists {
+				flat[key] = value
+			}
+		}
+	}
 	return flat
 }
 

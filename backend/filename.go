@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -159,10 +160,19 @@ func mustFileSize(path string) int64 {
 }
 
 func SanitizeFilename(name string) string {
+	return sanitizeFilenameForOS(name, runtime.GOOS)
+}
+
+func sanitizeFilenameForOS(name, goos string) string {
 
 	sanitized := strings.ReplaceAll(name, "/", " ")
 
-	re := regexp.MustCompile(`[<>:"\\|?*]`)
+	if goos == "windows" {
+
+		sanitized = strings.ReplaceAll(sanitized, "?", "？")
+	}
+
+	re := regexp.MustCompile(`[<>:"\\|*]`)
 	sanitized = re.ReplaceAllString(sanitized, " ")
 
 	var result strings.Builder

@@ -376,23 +376,23 @@ export function LyricsManagerPage() {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold">{t("translation.common.lyricsManager")}</h1>
             {files.length > 0 && (<div className="flex gap-2">
-                <Button size="sm" onClick={handleScan} disabled={scanning || extracting || saving || scannableCount === 0}>
+                <Button onClick={handleScan} disabled={scanning || extracting || saving || scannableCount === 0}>
                     <ScanText className={`h-4 w-4 ${scanning ? "animate-pulse" : ""}`}/>
                     {scanning ? t("translation.enrich.scanning") : t("translation.enrich.scan")}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleSelectFiles} disabled={scanning}>
+                <Button variant="outline" onClick={handleSelectFiles} disabled={scanning}>
                     <Upload className="h-4 w-4"/>
                     {t("translation.common.addFiles")}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleSelectFolder} disabled={scanning}>
+                <Button variant="outline" onClick={handleSelectFolder} disabled={scanning}>
                     <FolderOpen className="h-4 w-4"/>
                     {t("translation.common.addFolder")}
                 </Button>
-                {embeddedLoadedCount > 0 && (<Button variant="outline" size="sm" onClick={handleExtractAll} disabled={extracting || scanning}>
+                {embeddedLoadedCount > 0 && (<Button variant="outline" onClick={handleExtractAll} disabled={extracting || scanning}>
                     {extracting ? <Spinner className="h-4 w-4"/> : <Download className="h-4 w-4"/>}
                     {t("translation.lyricsManager.extractAll")}
                 </Button>)}
-                <Button variant="destructive" size="sm" onClick={clearFiles} disabled={extracting || scanning}>
+                <Button variant="destructive" onClick={clearFiles} disabled={extracting || scanning}>
                     <Trash2 className="h-4 w-4"/>
                     {t("translation.common.clearAll")}
                 </Button>
@@ -426,12 +426,12 @@ export function LyricsManagerPage() {
                 : t("translation.migrated.LyricsManagerPage.dragAndDropLRCOrAudioFiles")}
                 </p>
                 <div className="flex gap-2">
-                    <Button onClick={handleSelectFiles} size="lg">
-                        <Upload className="h-5 w-5"/>
+                    <Button onClick={handleSelectFiles}>
+                        <Upload className="h-4 w-4"/>
                         {t("translation.common.selectFiles")}
                     </Button>
-                    <Button onClick={handleSelectFolder} size="lg" variant="outline">
-                        <FolderOpen className="h-5 w-5"/>
+                    <Button onClick={handleSelectFolder} variant="outline">
+                        <FolderOpen className="h-4 w-4"/>
                         {t("translation.common.selectFolder")}
                     </Button>
                 </div>
@@ -490,29 +490,29 @@ export function LyricsManagerPage() {
                                 </span>
                             </div>
                             <div className="flex items-center gap-2 flex-wrap">
-                                {selectedFile.source === "embedded" && (<Button variant="outline" size="sm" onClick={handleExtractSelected} disabled={extracting}>
+                                {selectedFile.source === "embedded" && (<Button variant="outline" onClick={handleExtractSelected} disabled={extracting}>
                                     {extracting ? <Spinner className="h-4 w-4"/> : <Download className="h-4 w-4"/>}
                                     {t("translation.lyricsManager.extractLrc")}
                                 </Button>)}
-                                <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => setEditMode((v) => !v)} disabled={!canEdit}>
+                                <Button variant={editMode ? "default" : "outline"} onClick={() => setEditMode((v) => !v)} disabled={!canEdit}>
                                     <Pencil className="h-4 w-4"/>
                                     {editMode ? t("translation.migrated.LyricsManagerPage.editing") : t("translation.migrated.LyricsManagerPage.edit")}
                                 </Button>
                             </div>
                             {editMode && (<div className="flex items-center gap-2 flex-wrap">
-                                <Button variant="outline" size="sm" onClick={handleConvertToPlain} disabled={!draftSynced}>
+                                <Button variant="outline" onClick={handleConvertToPlain} disabled={!draftSynced}>
                                     <Type className="h-4 w-4"/>
                                     {t("translation.lyricsManager.convertPlain")}
                                 </Button>
-                                <Button variant="outline" size="sm" onClick={handleUndo} disabled={selectedFile.past.length === 0}>
+                                <Button variant="outline" onClick={handleUndo} disabled={selectedFile.past.length === 0}>
                                     <Undo2 className="h-4 w-4"/>
                                     {t("translation.lyricsManager.undo")}
                                 </Button>
-                                <Button variant="outline" size="sm" onClick={handleRedo} disabled={selectedFile.future.length === 0}>
+                                <Button variant="outline" onClick={handleRedo} disabled={selectedFile.future.length === 0}>
                                     <Redo2 className="h-4 w-4"/>
                                     {t("translation.lyricsManager.redo")}
                                 </Button>
-                                <Button variant="outline" size="sm" onClick={handleSave} disabled={!isDirty || saving}>
+                                <Button variant="outline" onClick={handleSave} disabled={!isDirty || saving}>
                                     {saving ? <Spinner className="h-4 w-4"/> : <Save className="h-4 w-4"/>}
                                     {t("translation.lyricsManager.save")}
                                 </Button>

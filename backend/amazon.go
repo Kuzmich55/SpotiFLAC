@@ -67,6 +67,13 @@ func amazonCommunityNormalizeQuality(quality string) string {
 	}
 }
 
+func copyAmazonStream(dst io.Writer, resp *http.Response) (int64, error) {
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("Amazon stream returned status %d", resp.StatusCode)
+	}
+	return io.Copy(dst, resp.Body)
+}
+
 func (a *AmazonDownloader) downloadFromCommunity(amazonURL, outputDir, quality string) (string, error) {
 
 	asinRegex := regexp.MustCompile(`(B[0-9A-Z]{9})`)
@@ -157,7 +164,7 @@ func (a *AmazonDownloader) downloadFromCommunity(amazonURL, outputDir, quality s
 
 	fmt.Printf("Downloading track: %s\n", asin)
 	pw := NewProgressWriter(out)
-	if _, err = io.Copy(pw, dlResp.Body); err != nil {
+	if _, err = copyAmazonStream(pw, dlResp); err != nil {
 		return "", err
 	}
 	out.Close()

@@ -67,10 +67,12 @@ export function useMetadata() {
         const results = await SearchSpotifyByType({
             query,
             search_type: "artist",
-            limit: 1,
+            limit: 10,
             offset: 0,
         });
-        return results[0]?.external_urls || null;
+        const normalizedQuery = query.toLocaleLowerCase();
+        const exactMatches = results.filter((result) => result.name.trim().toLocaleLowerCase() === normalizedQuery);
+        return exactMatches.length === 1 ? exactMatches[0]?.external_urls || null : null;
     };
     useEffect(() => {
         if (loading) {
@@ -313,7 +315,11 @@ export function useMetadata() {
         external_urls: string;
     }, originUrl?: string) => {
         logger.debug(`artist clicked: ${artist.name}`);
-        const resolvedArtistUrl = artist.external_urls.trim() || (await resolveArtistUrlBySearch(artist.name)) || "";
+        const artistID = artist.id.trim();
+        const artistUrlFromID = /^[a-zA-Z0-9]{22}$/.test(artistID)
+            ? `https://open.spotify.com/artist/${artistID}`
+            : "";
+        const resolvedArtistUrl = artist.external_urls.trim() || artistUrlFromID || (await resolveArtistUrlBySearch(artist.name)) || "";
         if (!resolvedArtistUrl) {
             toast.error(t("translation.migrated.useMetadata.artistNotFound", { value1: artist.name }));
             return "";

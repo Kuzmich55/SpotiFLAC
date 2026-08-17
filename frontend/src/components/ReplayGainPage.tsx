@@ -1,6 +1,6 @@
 import { t, translateMessage } from "@/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Activity, AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, CircleHelp, FileMusic, FolderOpen, Gauge, Save, StopCircle, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, CircleCheckBig, ChevronDown, CircleHelp, FileMusic, FolderOpen, Gauge, Save, StopCircle, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { AudioWaveformIcon } from "@/components/ui/audio-waveform";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
+import { REPLAYGAIN_TARGET_LUFS } from "@/lib/replaygain";
 import { AnalyzeReplayGainAlbum, AnalyzeReplayGainFile, CancelReplayGainAnalysis, GetFileSizes, ListAudioFilesInDir, SelectAudioFiles, SelectFolder, WriteReplayGainTags } from "../../wailsjs/go/main/App";
 import type { backend } from "../../wailsjs/go/models";
 import { OnFileDrop, OnFileDropOff } from "../../wailsjs/runtime/runtime";
@@ -37,7 +38,7 @@ interface ReplayGainPageCache {
     albumSignature: string;
 }
 const SUPPORTED_EXTENSIONS = [".flac", ".mp3", ".m4a", ".mp4", ".m4b", ".wav", ".aiff", ".aif", ".ogg", ".opus", ".ape", ".wv", ".mpc"];
-const REPLAYGAIN_TARGET = -18;
+const REPLAYGAIN_TARGET = REPLAYGAIN_TARGET_LUFS;
 const ERROR_SEPARATOR = " — ";
 const LOUDNESS_UNIT = "LUFS";
 const GAIN_UNIT = "dB";
@@ -78,7 +79,7 @@ function statusIcon(state: AnalysisState) {
     if (state === "analyzing")
         return <Spinner className="h-4 w-4 text-primary"/>;
     if (state === "success")
-        return <CheckCircle2 className="h-4 w-4 text-emerald-500"/>;
+        return <CircleCheckBig className="h-4 w-4 text-emerald-500"/>;
     if (state === "error")
         return <AlertCircle className="h-4 w-4 text-destructive"/>;
     return <FileMusic className="h-4 w-4 text-muted-foreground"/>;
@@ -448,24 +449,24 @@ export function ReplayGainPage() {
         <p className="truncate text-center text-xs text-muted-foreground">{progress.fileName || activeItem.name}</p>
       </div>
     </div>) : activeItem?.state === "error" ? (<div className="flex min-h-full items-center justify-center">
-      <div className="w-full max-w-md space-y-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive"><p>{translateMessage(activeItem.error || t("translation.replayGain.analysisFailed"))}</p>{!analyzing && <Button size="sm" onClick={analyzePending}>{t("translation.queue.retry")}</Button>}</div>
+      <div className="w-full max-w-md space-y-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive"><p>{translateMessage(activeItem.error || t("translation.replayGain.analysisFailed"))}</p>{!analyzing && <Button onClick={analyzePending}>{t("translation.queue.retry")}</Button>}</div>
     </div>) : (<div className="flex min-h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground"><AudioWaveformIcon className="text-primary" size={36}/><span>{t("translation.replayGain.resultsAppearHere")}</span></div>);
     return (<div className="flex h-[calc(100dvh-5.5rem)] min-h-0 flex-col gap-6 md:h-[calc(100dvh-6.5rem)]">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">{t("translation.replayGain.title")}</h1>
         {items.length > 0 && (<div className="flex flex-wrap items-center gap-2">
-          {(analyzing || albumAnalyzing) && (<Button variant="destructive" size="sm" onClick={stopAnalysis}><StopCircle className="h-4 w-4"/>{t("translation.common.stop")}</Button>)}
-          {!analyzing && !albumAnalyzing && hasPending && (<Button size="sm" onClick={analyzePending} disabled={writing}><Activity className="h-4 w-4"/>{t("translation.audioAnalysis.analyze")}</Button>)}
-          {!analyzing && successfulItems.length > 0 && (<><HelpTooltip content={t("translation.replayGain.tagOnly")}/><Button size="sm" onClick={() => setConfirmOpen(true)} disabled={busy}>{writing ? <Spinner className="h-4 w-4"/> : <Save className="h-4 w-4"/>}{writing ? t("translation.replayGain.writingTags") : t("translation.replayGain.writeTags")}</Button></>)}
-          {isBatchMode && (<DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={busy}><Upload className="mr-1 h-4 w-4"/>{t("translation.common.add")}<ChevronDown className="ml-1 h-4 w-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-[180px]"><DropdownMenuItem onClick={() => void addFiles()} className="cursor-pointer"><Upload className="h-4 w-4"/>{t("translation.common.addFiles")}</DropdownMenuItem><DropdownMenuItem onClick={() => void addFolder()} className="cursor-pointer"><FolderOpen className="h-4 w-4"/>{t("translation.common.addFolder")}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>)}
-          <Button variant="destructive" size="sm" onClick={clearAll} disabled={busy}><Trash2 className="h-4 w-4"/>{t("translation.common.clear")}</Button>
+          {isBatchMode && (analyzing || albumAnalyzing) && (<Button variant="destructive" onClick={stopAnalysis}><StopCircle className="h-4 w-4"/>{t("translation.common.stop")}</Button>)}
+          {!analyzing && !albumAnalyzing && hasPending && (<Button onClick={analyzePending} disabled={writing}><Activity className="h-4 w-4"/>{t("translation.audioAnalysis.analyze")}</Button>)}
+          {!analyzing && successfulItems.length > 0 && (<><HelpTooltip content={t("translation.replayGain.tagOnly")}/><Button onClick={() => setConfirmOpen(true)} disabled={busy}>{writing ? <Spinner className="h-4 w-4"/> : <Save className="h-4 w-4"/>}{writing ? t("translation.replayGain.writingTags") : t("translation.replayGain.writeTags")}</Button></>)}
+          {isBatchMode && (<DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" disabled={busy}><Upload className="mr-1 h-4 w-4"/>{t("translation.common.add")}<ChevronDown className="ml-1 h-4 w-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="min-w-[180px]"><DropdownMenuItem onClick={() => void addFiles()} className="cursor-pointer"><Upload className="h-4 w-4"/>{t("translation.common.addFiles")}</DropdownMenuItem><DropdownMenuItem onClick={() => void addFolder()} className="cursor-pointer"><FolderOpen className="h-4 w-4"/>{t("translation.common.addFolder")}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>)}
+          {(isBatchMode || (isSingleMode && !analyzing && !albumAnalyzing && result)) && (<Button variant="destructive" onClick={clearAll} disabled={busy}><Trash2 className="h-4 w-4"/>{t("translation.common.clear")}</Button>)}
         </div>)}
       </div>
 
       {items.length === 0 && (<div className={`flex min-h-0 flex-1 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-all ${isDragging ? "border-primary bg-primary/10" : "border-muted-foreground/30"}`} onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={(event) => { event.preventDefault(); setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); }} style={{ "--wails-drop-target": "drop" } as CSSProperties}>
         <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted"><Upload className="h-8 w-8 text-primary"/></div>
         <p className="mb-4 text-center text-sm text-muted-foreground">{isDragging ? t("translation.audioAnalysis.dropAudioFilesHere") : t("translation.audioAnalysis.dragDropAudioFilesHere")}</p>
-        <div className="flex gap-3"><Button onClick={() => void addFiles()} size="lg"><Upload className="h-5 w-5"/>{t("translation.common.selectFiles")}</Button><Button onClick={() => void addFolder()} size="lg" variant="outline"><FolderOpen className="h-5 w-5"/>{t("translation.common.selectFolder")}</Button></div>
+        <div className="flex gap-3"><Button onClick={() => void addFiles()}><Upload className="h-4 w-4"/>{t("translation.common.selectFiles")}</Button><Button onClick={() => void addFolder()} variant="outline"><FolderOpen className="h-4 w-4"/>{t("translation.common.selectFolder")}</Button></div>
         <p className="mt-4 text-center text-xs text-muted-foreground">{t("translation.replayGain.supportedFormats")}</p>
       </div>)}
 
@@ -479,13 +480,15 @@ export function ReplayGainPage() {
               {items.map((item) => {
                 const itemResult = item.result?.success ? item.result : null;
                 const statusText = itemResult ? `${formatLoudness(itemResult.integrated_loudness)} · ${formatGain(REPLAYGAIN_TARGET - itemResult.integrated_loudness)}` : item.state === "error" ? translateMessage(item.error || t("translation.replayGain.analysisFailed")) : item.state === "analyzing" ? t("translation.replayGain.analyzing") : t("translation.replayGain.pending");
-                return (<div key={item.path} role="button" tabIndex={0} className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${activeItem?.path === item.path ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`} onClick={() => setActiveSelection(item.path)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setActiveSelection(item.path);
-                } }}>
+                return (<div key={item.path} role="button" tabIndex={0} className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${activeItem?.path === item.path ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`} onClick={() => setActiveSelection(item.path)} onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setActiveSelection(item.path);
+                        }
+                    }}>
                   <div className="mt-0.5 shrink-0">{statusIcon(item.state)}</div>
                   <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{item.name}</p><p className={`truncate text-xs ${item.state === "error" ? "text-destructive" : "text-muted-foreground"}`}>{statusText}</p><div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground"><span>{formatFileSize(item.size)}</span><span>{item.name.split(".").pop()?.toUpperCase() || t("translation.audioAnalysis.audio")}</span></div></div>
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" aria-label={t("translation.replayGain.removeFile")} onClick={(event) => { event.stopPropagation(); removeItem(item.path); }} disabled={busy}><X className="h-4 w-4"/></Button>
+                  <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("translation.replayGain.removeFile")} onClick={(event) => { event.stopPropagation(); removeItem(item.path); }} disabled={busy}><X className="h-4 w-4"/></Button>
                 </div>);
             })}
             </div>

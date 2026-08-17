@@ -135,6 +135,18 @@ func appendExecutableCandidate(candidates []executableCandidate, seen map[string
 	})
 }
 
+func buildExecutableCandidates(localPath, localSource, systemPath string) []executableCandidate {
+	candidates := make([]executableCandidate, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	if localSource != "" {
+		candidates = appendExecutableCandidate(candidates, seen, localPath, localSource)
+	}
+	if systemPath != "" {
+		candidates = appendExecutableCandidate(candidates, seen, systemPath, "system")
+	}
+	return candidates
+}
+
 func resolveSystemExecutable(executableName string) string {
 	if runtime.GOOS == "darwin" {
 		candidates := []string{
@@ -226,26 +238,22 @@ func resolveExecutablePath(executableName string) (string, string, error) {
 	nextDir := filepath.Join(filepath.Dir(ffmpegDir), ".spotiflac-next")
 	nextPath := filepath.Join(nextDir, executableName)
 	localExists := false
-	candidates := make([]executableCandidate, 0, 3)
-	seen := make(map[string]struct{}, 3)
-
-	if systemPath := resolveSystemExecutable(executableName); systemPath != "" {
-		candidates = appendExecutableCandidate(candidates, seen, systemPath, "system")
-	}
+	localSource := ""
 
 	if _, err := os.Stat(localPath); err == nil {
 		localExists = true
-		candidates = appendExecutableCandidate(candidates, seen, localPath, "local")
+		localSource = "local"
 	}
 
 	if !localExists {
 		if _, err := os.Stat(nextPath); err == nil {
 			if copyErr := copyExecutable(nextPath, localPath); copyErr == nil {
 				fmt.Printf("[FFmpeg] Copied %s from SpotiFLAC-Next folder\n", executableName)
-				candidates = appendExecutableCandidate(candidates, seen, localPath, "migrated")
+				localSource = "migrated"
 			}
 		}
 	}
+	candidates := buildExecutableCandidates(localPath, localSource, resolveSystemExecutable(executableName))
 
 	var lastErr error
 	for _, candidate := range candidates {

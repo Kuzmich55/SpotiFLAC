@@ -5,9 +5,63 @@ import { getSettings, parseTemplate, sanitizeAutoOrder, getEffectiveAlbumFilenam
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
 import { joinPath, sanitizePath, getFirstArtist } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import { writeAutomaticReplayGainTags } from "@/lib/replaygain";
 import type { TrackMetadata } from "@/types/api";
-import { beginDirectCollectionQueueItem, beginDirectTrackQueueItem, finishDirectQueueItem, type QueueExecutionResult, type QueueItemType, type QueueTrackStatus } from "@/lib/queue";
+import { beginDirectCollectionQueueItem, beginDirectTrackQueueItem, finishDirectQueueItem, getQueueTrackStatusSets, updateQueueTrackResult, type QueueExecutionResult, type QueueItemType, type QueueResumeContext, type QueueTrackStatus } from "@/lib/queue";
 type BatchDownloadSource = "playlist" | "album" | "discography" | "collection";
+function getCompleteAlbumPaths(tracks: TrackMetadata[], filePaths: Map<string, string>, completedTrackIDs: Set<string>): string[] | null {
+    if (tracks.length < 2)
+        return null;
+    const expectedTrackCount = Math.max(0, ...tracks.map((track) => track.total_tracks || 0));
+    if (expectedTrackCount === 0 || tracks.length !== expectedTrackCount)
+        return null;
+    if (tracks.some((track) => !completedTrackIDs.has(track.spotify_id || "")))
+        return null;
+    const paths = tracks.map((track) => filePaths.get(track.spotify_id || "") || "");
+    if (paths.some((path) => path === "") || new Set(paths).size !== paths.length)
+        return null;
+    return paths;
+}
+function getCompletedTrackPaths(tracks: TrackMetadata[], filePaths: Map<string, string>, completedTrackIDs: Set<string>): string[] {
+    return tracks
+        .filter((track) => completedTrackIDs.has(track.spotify_id || ""))
+        .map((track) => filePaths.get(track.spotify_id || "") || "")
+        .filter(Boolean);
+}
+async function applyAutomaticReplayGain(filePaths: string[], writeAlbumTags: boolean): Promise<void> {
+    const paths = Array.from(new Set(filePaths.filter(Boolean)));
+    if (paths.length === 0)
+        return;
+    const progressToast = toast.silentInfo(t("translation.replayGain.autoAnalyzing", { value1: paths.length }), {
+        duration: Infinity,
+    });
+    try {
+        logger.info(`automatic ReplayGain analysis started for ${paths.length} file(s)`);
+        const result = await writeAutomaticReplayGainTags(paths, writeAlbumTags);
+        toast.dismiss(progressToast);
+        for (const error of result.errors) {
+            logger.warning(`automatic ReplayGain: ${error}`);
+        }
+        const description = result.errors[0];
+        if (result.tagged === result.requested && (!result.albumRequested || result.albumApplied)) {
+            toast.success(t("translation.replayGain.autoWriteComplete", { value1: result.tagged }));
+        }
+        else if (result.tagged > 0 && result.tagged < result.requested) {
+            toast.warning(t("translation.replayGain.autoWritePartial", { value1: result.tagged, value2: result.requested }), { description });
+        }
+        else if (result.tagged > 0 && result.albumRequested && !result.albumApplied) {
+            toast.warning(t("translation.replayGain.autoAlbumFallback"), { description });
+        }
+        else {
+            toast.warning(t("translation.replayGain.autoWriteFailed"), { description });
+        }
+    }
+    catch (error) {
+        toast.dismiss(progressToast);
+        logger.warning(`automatic ReplayGain failed: ${error}`);
+        toast.warning(t("translation.replayGain.autoWriteFailed"), { description: String(error) });
+    }
+}
 function queueCollectionType(source: BatchDownloadSource, tracks: TrackMetadata[] = []): Exclude<QueueItemType, "track"> {
     if (source === "album")
         return "album";
@@ -21,7 +75,7 @@ function queueCollectionType(source: BatchDownloadSource, tracks: TrackMetadata[
     }
     return "playlist";
 }
-function buildQueueExecutionResult(tracks: TrackMetadata[], skipped: Set<string>, failed: Map<string, string>, completed: Set<string>, cancelled = false): QueueExecutionResult {
+function buildQueueExecutionResult(tracks: TrackMetadata[], skipped: Set<string>, failed: Map<string, string>, completed: Set<string>, cancelled = false, paused = false, trackFilePaths: Record<string, string> = {}): QueueExecutionResult {
     const trackResults: Record<string, QueueTrackStatus> = {};
     let successCount = 0;
     let skippedCount = 0;
@@ -43,7 +97,15 @@ function buildQueueExecutionResult(tracks: TrackMetadata[], skipped: Set<string>
             successCount++;
         }
     }
-    return { trackResults, successCount, skippedCount, failedCount, cancelled };
+    return { trackResults, trackFilePaths, successCount, skippedCount, failedCount, cancelled, paused };
+}
+function buildFailedQueueExecutionResult(tracks: TrackMetadata[], message: string, cancelled = false): QueueExecutionResult {
+    const failures = new Map<string, string>();
+    for (const track of tracks) {
+        if (track.spotify_id)
+            failures.set(track.spotify_id, message);
+    }
+    return buildQueueExecutionResult(tracks, new Set<string>(), failures, new Set<string>(), cancelled);
 }
 function isCooldownMessage(message?: string): boolean {
     if (!message)
@@ -73,8 +135,10 @@ interface CheckFileExistenceRequest {
     spotify_id: string;
     track_name: string;
     artist_name: string;
+    artists?: string;
     album_name?: string;
     album_artist?: string;
+    album_artists?: string;
     release_date?: string;
     isrc?: string;
     track_number?: number;
@@ -109,6 +173,7 @@ async function resolveTemplateISRC(settings: {
     const folderTemplate = settings.folderTemplate || "";
     const filenameTemplate = settings.filenameTemplate || "";
     const shouldResolveISRC = settings.existingFileCheckMode === "isrc" ||
+        settings.existingFileCheckMode === "hybrid" ||
         folderTemplate.includes("{isrc}") ||
         filenameTemplate.includes("{isrc}");
     if (!shouldResolveISRC) {
@@ -129,6 +194,22 @@ function getTidalAudioFormat(settings: any, mode: "single" | "auto"): "LOSSLESS"
     }
     return settings.tidalQuality || "LOSSLESS";
 }
+function getExpectedAudioFormat(settings: {
+    autoConvertAudio?: boolean;
+    autoConvertFormat?: string;
+}): string {
+    return settings.autoConvertAudio ? settings.autoConvertFormat || "mp3" : "flac";
+}
+function deduplicateTracksBySpotifyID(tracks: TrackMetadata[]): TrackMetadata[] {
+    const seen = new Set<string>();
+    return tracks.filter((track) => {
+        const spotifyID = track.spotify_id?.trim() || "";
+        if (!spotifyID || seen.has(spotifyID))
+            return false;
+        seen.add(spotifyID);
+        return true;
+    });
+}
 function shouldFetchStreamingURLs(order: string[]): boolean {
     return order.includes("amazon") || order.includes("tidal");
 }
@@ -139,28 +220,22 @@ function getCustomInstanceFields(tidalApi?: string, qobuzApi?: string) {
     };
 }
 export function useDownload() {
-    const [downloadProgress, setDownloadProgress] = useState<number>(0);
-    const [downloadRemainingCount, setDownloadRemainingCount] = useState<number>(0);
+    const [restoredQueueTrackStatuses] = useState(() => getQueueTrackStatusSets());
     const [isDownloading, setIsDownloading] = useState(false);
     const [downloadingTrack, setDownloadingTrack] = useState<string | null>(null);
-    const [bulkDownloadType, setBulkDownloadType] = useState<"all" | "selected" | null>(null);
-    const [downloadedTracks, setDownloadedTracks] = useState<Set<string>>(new Set());
-    const [failedTracks, setFailedTracks] = useState<Set<string>>(new Set());
-    const [skippedTracks, setSkippedTracks] = useState<Set<string>>(new Set());
-    const [currentDownloadInfo, setCurrentDownloadInfo] = useState<{
-        name: string;
-        artists: string;
-    } | null>(null);
+    const [downloadedTracks, setDownloadedTracks] = useState<Set<string>>(() => new Set(restoredQueueTrackStatuses.downloadedTracks));
+    const [failedTracks, setFailedTracks] = useState<Set<string>>(() => new Set(restoredQueueTrackStatuses.failedTracks));
+    const [skippedTracks, setSkippedTracks] = useState<Set<string>>(() => new Set(restoredQueueTrackStatuses.skippedTracks));
     const shouldStopDownloadRef = useRef(false);
-    const updateBatchProgress = (completedCount: number, totalCount: number) => {
-        const safeTotalCount = Math.max(0, totalCount);
-        const safeCompletedCount = Math.min(Math.max(0, completedCount), safeTotalCount);
-        setDownloadProgress(safeTotalCount > 0 ? Math.min(100, Math.round((safeCompletedCount / safeTotalCount) * 100)) : 0);
-        setDownloadRemainingCount(Math.max(0, safeTotalCount - safeCompletedCount));
+    const shouldPauseDownloadRef = useRef(false);
+    const resetBatchDownloadState = () => {
+        setDownloadingTrack(null);
+        setIsDownloading(false);
+        shouldStopDownloadRef.current = false;
+        shouldPauseDownloadRef.current = false;
     };
     const downloadWithAutoFallback = async (id: string, settings: any, trackName?: string, artistName?: string, albumName?: string, playlistName?: string, position?: number, spotifyId?: string, durationMs?: number, releaseYear?: string, albumArtist?: string, releaseDate?: string, coverUrl?: string, spotifyTrackNumber?: number, spotifyDiscNumber?: number, spotifyTotalTracks?: number, spotifyTotalDiscs?: number, copyright?: string, publisher?: string) => {
         const service = settings.downloader;
-        const query = trackName && artistName ? `${trackName} ${artistName} ` : undefined;
         const os = settings.operatingSystem;
         const customTidalApi = typeof settings.customTidalApi === "string" && settings.customTidalApi.trim().startsWith("https://")
             ? settings.customTidalApi.trim().replace(/\/+$/g, "")
@@ -178,8 +253,14 @@ export function useDownload() {
         if (spotifyId) {
             try {
                 const trackURL = `https://open.spotify.com/track/${spotifyId}`;
-                const trackMetadata = await fetchSpotifyMetadata(trackURL, false, 0, 10);
+                const trackMetadata = await fetchSpotifyMetadata(trackURL, false, 0, 10, settings.separator);
                 if ("track" in trackMetadata && trackMetadata.track) {
+                    if (trackMetadata.track.artists) {
+                        artistName = trackMetadata.track.artists;
+                    }
+                    if (trackMetadata.track.album_artist) {
+                        albumArtist = trackMetadata.track.album_artist;
+                    }
                     if (trackMetadata.track.release_date) {
                         finalReleaseDate = trackMetadata.track.release_date;
                     }
@@ -197,6 +278,7 @@ export function useDownload() {
             catch (err) {
             }
         }
+        const query = trackName && artistName ? `${trackName} ${artistName} ` : undefined;
         const yearValue = releaseYear || finalReleaseDate?.substring(0, 4);
         const hasSubfolder = settings.folderTemplate && settings.folderTemplate.trim() !== "" && settings.applyFolderToSingleTrack;
         const trackNumberForTemplate = (hasSubfolder && finalTrackNumber > 0) ? finalTrackNumber : (position || 0);
@@ -241,7 +323,7 @@ export function useDownload() {
                 }
             }
         }
-        const serviceForCheck = service === "auto" ? "flac" : (service === "tidal" ? "flac" : (service === "qobuz" ? "flac" : "flac"));
+        const serviceForCheck = getExpectedAudioFormat(settings);
         let fileExists = false;
         if (trackName && artistName) {
             try {
@@ -249,8 +331,10 @@ export function useDownload() {
                     spotify_id: spotifyId || id,
                     track_name: trackName,
                     artist_name: displayArtist || "",
+                    artists: artistName || "",
                     album_name: albumName,
                     album_artist: displayAlbumArtist,
+                    album_artists: albumArtist,
                     release_date: finalReleaseDate || releaseDate,
                     isrc: resolvedTemplateISRC || undefined,
                     track_number: finalTrackNumber || spotifyTrackNumber || 0,
@@ -543,7 +627,6 @@ export function useDownload() {
     const downloadWithItemID = async (settings: any, itemID: string, trackName?: string, artistName?: string, albumName?: string, folderName?: string, position?: number, spotifyId?: string, durationMs?: number, isAlbum?: boolean, releaseYear?: string, albumArtist?: string, releaseDate?: string, coverUrl?: string, spotifyTrackNumber?: number, spotifyDiscNumber?: number, spotifyTotalTracks?: number, spotifyTotalDiscs?: number, copyright?: string, publisher?: string) => {
         settings = { ...settings, filenameTemplate: getEffectiveAlbumFilenameTemplate(settings) };
         const service = settings.downloader;
-        const query = trackName && artistName ? `${trackName} ${artistName}` : undefined;
         const os = settings.operatingSystem;
         const customTidalApi = typeof settings.customTidalApi === "string" && settings.customTidalApi.trim().startsWith("https://")
             ? settings.customTidalApi.trim().replace(/\/+$/g, "")
@@ -561,8 +644,14 @@ export function useDownload() {
         if (spotifyId) {
             try {
                 const trackURL = `https://open.spotify.com/track/${spotifyId}`;
-                const trackMetadata = await fetchSpotifyMetadata(trackURL, false, 0, 10);
+                const trackMetadata = await fetchSpotifyMetadata(trackURL, false, 0, 10, settings.separator);
                 if ("track" in trackMetadata && trackMetadata.track) {
+                    if (trackMetadata.track.artists) {
+                        artistName = trackMetadata.track.artists;
+                    }
+                    if (trackMetadata.track.album_artist) {
+                        albumArtist = trackMetadata.track.album_artist;
+                    }
                     if (trackMetadata.track.release_date) {
                         finalReleaseDate = trackMetadata.track.release_date;
                     }
@@ -580,6 +669,7 @@ export function useDownload() {
             catch (err) {
             }
         }
+        const query = trackName && artistName ? `${trackName} ${artistName}` : undefined;
         const yearValue = releaseYear || finalReleaseDate?.substring(0, 4);
         const hasSubfolder = settings.folderTemplate && settings.folderTemplate.trim() !== "";
         const trackNumberForTemplate = (hasSubfolder && finalTrackNumber > 0) ? finalTrackNumber : (position || 0);
@@ -906,6 +996,9 @@ export function useDownload() {
             const releaseYear = releaseDate?.substring(0, 4);
             const response = await downloadWithAutoFallback(id, settings, trackName, artistName, albumName, playlistName, position, spotifyId, durationMs, releaseYear, albumArtist || "", releaseDate, coverUrl, spotifyTrackNumber, spotifyDiscNumber, spotifyTotalTracks, spotifyTotalDiscs, copyright, publisher);
             if (response.success) {
+                if (settings.autoReplayGainTags && !response.already_exists && response.file) {
+                    await applyAutomaticReplayGain([response.file], false);
+                }
                 if (response.already_exists) {
                     toast.info(translateMessage(response.message));
                     setSkippedTracks((prev) => new Set(prev).add(id));
@@ -950,6 +1043,7 @@ export function useDownload() {
         }
         finally {
             setDownloadingTrack(null);
+            shouldStopDownloadRef.current = false;
         }
     };
     const handleDownloadSelected = async (selectedTracks: string[], allTracks: TrackMetadata[], folderName?: string, isAlbum?: boolean, batchSource: BatchDownloadSource = "collection", queueItemId?: string) => {
@@ -957,186 +1051,498 @@ export function useDownload() {
             toast.error(t("translation.download.noTracksSelected"));
             return;
         }
-        logger.info(`starting batch download: ${selectedTracks.length} selected tracks`);
         const settings = getSettings();
-        setIsDownloading(true);
-        setBulkDownloadType("selected");
-        setDownloadProgress(0);
-        setDownloadRemainingCount(selectedTracks.length);
-        setCurrentDownloadInfo(null);
-        let outputDir = settings.downloadPath;
-        const os = settings.operatingSystem;
-        const useAlbumTag = settings.folderTemplate?.includes("{album}");
-        if (settings.createPlaylistFolder && folderName && (!isAlbum || !useAlbumTag)) {
-            outputDir = joinPath(os, outputDir, sanitizePath(folderName.replace(/\//g, " "), os));
-        }
-        const selectedTrackObjects = selectedTracks
+        const selectedTrackCandidates = selectedTracks
             .map((id) => allTracks.find((t) => t.spotify_id === id))
             .filter((t): t is TrackMetadata => t !== undefined);
+        const selectedTrackObjects = settings.redownloadWithSuffix
+            ? selectedTrackCandidates
+            : deduplicateTracksBySpotifyID(selectedTrackCandidates);
         const directQueueItemId = queueItemId || beginDirectCollectionQueueItem({
             type: queueCollectionType(isAlbum ? "album" : batchSource, selectedTrackObjects), name: folderName || selectedTrackObjects[0]?.album_name || t("translation.queue.queue"),
             artist: selectedTrackObjects[0]?.album_artist || selectedTrackObjects[0]?.artists || "",
             info: `${selectedTrackObjects.length} ${t("translation.common.tracks")}`, image: selectedTrackObjects[0]?.images || "",
             folderName, isAlbum, tracks: selectedTrackObjects,
         });
-        logger.info(`checking existing files in parallel...`);
-        const useAlbumTrackNumber = templateUsesAlbumTrackNumber(settings);
-        const albumFilenameTemplate = getEffectiveAlbumFilenameTemplate(settings);
-        const audioFormat = "flac";
-        const existenceChecks = selectedTrackObjects.map((track, index) => {
-            const displayArtist = track.artists ? getFirstArtist(track.artists) : track.artists;
-            const displayAlbumArtist = track.album_artist ? getFirstArtist(track.album_artist) : track.album_artist;
-            return {
-                spotify_id: track.spotify_id || "",
-                track_name: track.name || "",
-                artist_name: displayArtist || "",
-                artists: track.artists || "",
-                album_name: track.album_name || "",
-                album_artist: displayAlbumArtist || "",
-                category: getAlbumCategoryLabel(track.album_type),
-                upc: track.upc || "",
-                release_date: track.release_date || "",
-                track_number: track.track_number || 0,
-                disc_number: track.disc_number || 0,
-                total_tracks: track.total_tracks || 0,
-                total_discs: track.total_discs || 0,
-                position: index + 1,
-                use_album_track_number: useAlbumTrackNumber,
-                filename_format: albumFilenameTemplate || "",
-                include_track_number: settings.trackNumber || false,
-                audio_format: audioFormat,
-            };
-        });
-        const existenceResults = await CheckFilesExistence(outputDir, settings.downloadPath, existenceChecks);
-        const existingSpotifyIDs = new Set<string>();
-        const existingFilePaths = new Map<string, string>();
-        const finalFilePaths = new Map<string, string>();
-        for (const result of existenceResults) {
-            if (result.exists) {
-                existingSpotifyIDs.add(result.spotify_id);
-                existingFilePaths.set(result.spotify_id, result.file_path || "");
-                finalFilePaths.set(result.spotify_id, result.file_path || "");
+        logger.info(`starting batch download: ${selectedTrackObjects.length} selected tracks`);
+        shouldStopDownloadRef.current = false;
+        setIsDownloading(true);
+        try {
+            let outputDir = settings.downloadPath;
+            const os = settings.operatingSystem;
+            const useAlbumTag = settings.folderTemplate?.includes("{album}");
+            if (settings.createPlaylistFolder && folderName && (!isAlbum || !useAlbumTag)) {
+                outputDir = joinPath(os, outputDir, sanitizePath(folderName.replace(/\//g, " "), os));
             }
-        }
-        logger.info(`found ${existingSpotifyIDs.size} existing files`);
-        const { AddToDownloadQueue } = await import("../../wailsjs/go/main/App");
-        const itemIDs: string[] = [];
-        for (const id of selectedTracks) {
-            const track = allTracks.find((t) => t.spotify_id === id);
-            if (!track)
-                continue;
-            const trackID = track.spotify_id || id;
-            const displayArtist = track.artists;
-            const itemID = await AddToDownloadQueue(trackID, track.name || "", displayArtist || "", track.album_name || "");
-            itemIDs.push(itemID);
-            if (existingSpotifyIDs.has(trackID)) {
-                const filePath = existingFilePaths.get(trackID) || "";
-                setTimeout(() => SkipDownloadItem(itemID, filePath), 10);
-                setSkippedTracks((prev) => new Set(prev).add(id));
-                setDownloadedTracks((prev) => new Set(prev).add(id));
+            logger.info(`checking existing files in parallel...`);
+            const useAlbumTrackNumber = templateUsesAlbumTrackNumber(settings);
+            const albumFilenameTemplate = getEffectiveAlbumFilenameTemplate(settings);
+            const audioFormat = getExpectedAudioFormat(settings);
+            const existenceChecks = selectedTrackObjects.map((track, index) => {
+                const displayArtist = track.artists ? getFirstArtist(track.artists) : track.artists;
+                const displayAlbumArtist = track.album_artist ? getFirstArtist(track.album_artist) : track.album_artist;
+                return {
+                    spotify_id: track.spotify_id || "",
+                    track_name: track.name || "",
+                    artist_name: displayArtist || "",
+                    artists: track.artists || "",
+                    album_name: track.album_name || "",
+                    album_artist: displayAlbumArtist || "",
+                    album_artists: track.album_artist || "",
+                    category: getAlbumCategoryLabel(track.album_type),
+                    upc: track.upc || "",
+                    release_date: track.release_date || "",
+                    isrc: track.isrc || undefined,
+                    track_number: track.track_number || 0,
+                    disc_number: track.disc_number || 0,
+                    total_tracks: track.total_tracks || 0,
+                    total_discs: track.total_discs || 0,
+                    position: index + 1,
+                    use_album_track_number: useAlbumTrackNumber,
+                    filename_format: albumFilenameTemplate || "",
+                    include_track_number: settings.trackNumber || false,
+                    audio_format: audioFormat,
+                };
+            });
+            const existenceResults = await CheckFilesExistence(outputDir, settings.downloadPath, existenceChecks);
+            const existingSpotifyIDs = new Set<string>();
+            const existingFilePaths = new Map<string, string>();
+            const finalFilePaths = new Map<string, string>();
+            for (const result of existenceResults) {
+                if (result.exists) {
+                    existingSpotifyIDs.add(result.spotify_id);
+                    existingFilePaths.set(result.spotify_id, result.file_path || "");
+                    finalFilePaths.set(result.spotify_id, result.file_path || "");
+                }
             }
-        }
-        const tracksToDownload = selectedTrackObjects.filter((track) => {
-            const trackID = track.spotify_id || "";
-            return !existingSpotifyIDs.has(trackID);
-        });
-        let successCount = 0;
-        let errorCount = 0;
-        let skippedCount = existingSpotifyIDs.size;
-        const total = selectedTracks.length;
-        const failedErrorMessages = new Map<string, string>();
-        const completedSpotifyIDs = new Set<string>();
-        updateBatchProgress(skippedCount, total);
-        for (let i = 0; i < tracksToDownload.length; i++) {
-            if (shouldStopDownloadRef.current) {
-                toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
-                break;
+            logger.info(`found ${existingSpotifyIDs.size} existing files`);
+            const { AddToDownloadQueue } = await import("../../wailsjs/go/main/App");
+            const itemIDs: string[] = [];
+            for (const track of selectedTrackObjects) {
+                const trackID = track.spotify_id || "";
+                const displayArtist = track.artists;
+                const itemID = await AddToDownloadQueue(trackID, track.name || "", displayArtist || "", track.album_name || "");
+                itemIDs.push(itemID);
+                if (existingSpotifyIDs.has(trackID)) {
+                    const filePath = existingFilePaths.get(trackID) || "";
+                    setTimeout(() => SkipDownloadItem(itemID, filePath), 10);
+                    setSkippedTracks((prev) => new Set(prev).add(trackID));
+                    setDownloadedTracks((prev) => new Set(prev).add(trackID));
+                }
             }
-            const track = tracksToDownload[i];
-            const id = track.spotify_id || "";
-            const originalIndex = selectedTracks.indexOf(id);
-            const itemID = itemIDs[originalIndex];
-            setDownloadingTrack(id);
-            const displayArtist = track.artists;
-            setCurrentDownloadInfo({ name: track.name, artists: displayArtist || "" });
-            try {
-                const releaseYear = track.release_date?.substring(0, 4);
-                const response = await downloadWithItemID(settings, itemID, track.name, track.artists, track.album_name, folderName, originalIndex + 1, track.spotify_id, track.duration_ms, isAlbum, releaseYear, track.album_artist || "", track.release_date, track.images, track.track_number, track.disc_number, track.total_tracks, track.total_discs, track.copyright, track.publisher);
-                if (response.cancelled || shouldStopDownloadRef.current) {
+            const tracksToDownload = selectedTrackObjects
+                .map((track, originalIndex) => ({ track, originalIndex }))
+                .filter(({ track }) => !existingSpotifyIDs.has(track.spotify_id || ""));
+            let successCount = 0;
+            let errorCount = 0;
+            let skippedCount = existingSpotifyIDs.size;
+            const failedErrorMessages = new Map<string, string>();
+            const completedSpotifyIDs = new Set<string>();
+            for (let i = 0; i < tracksToDownload.length; i++) {
+                if (shouldStopDownloadRef.current) {
                     toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
                     break;
                 }
-                if (response.success) {
-                    if (response.already_exists) {
-                        skippedCount++;
-                        logger.info(`skipped: ${track.name} - ${displayArtist} (already exists)`);
-                        setSkippedTracks((prev) => new Set(prev).add(id));
+                const { track, originalIndex } = tracksToDownload[i];
+                const id = track.spotify_id || "";
+                const itemID = itemIDs[originalIndex];
+                setDownloadingTrack(id);
+                const displayArtist = track.artists;
+                try {
+                    const releaseYear = track.release_date?.substring(0, 4);
+                    const response = await downloadWithItemID(settings, itemID, track.name, track.artists, track.album_name, folderName, originalIndex + 1, track.spotify_id, track.duration_ms, isAlbum, releaseYear, track.album_artist || "", track.release_date, track.images, track.track_number, track.disc_number, track.total_tracks, track.total_discs, track.copyright, track.publisher);
+                    if (response.cancelled || shouldStopDownloadRef.current) {
+                        toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
+                        break;
+                    }
+                    if (response.success) {
+                        if (response.already_exists) {
+                            skippedCount++;
+                            logger.info(`skipped: ${track.name} - ${displayArtist} (already exists)`);
+                            setSkippedTracks((prev) => new Set(prev).add(id));
+                        }
+                        else {
+                            successCount++;
+                            completedSpotifyIDs.add(id);
+                            logger.success(`downloaded: ${track.name} - ${displayArtist}${formatSourceSuffix(response)}`);
+                        }
+                        if (response.file) {
+                            finalFilePaths.set(id, response.file);
+                            finalFilePaths.set(track.spotify_id || id, response.file);
+                        }
+                        setDownloadedTracks((prev) => new Set(prev).add(id));
+                        setFailedTracks((prev) => {
+                            const newSet = new Set(prev);
+                            newSet.delete(id);
+                            return newSet;
+                        });
                     }
                     else {
-                        successCount++;
-                        completedSpotifyIDs.add(id);
-                        logger.success(`downloaded: ${track.name} - ${displayArtist}${formatSourceSuffix(response)}`);
+                        errorCount++;
+                        logger.error(`failed: ${track.name} - ${displayArtist}`);
+                        failedErrorMessages.set(id, translateMessage(response.error || t("translation.download.downloadFailed")));
+                        setFailedTracks((prev) => new Set(prev).add(id));
+                        if (isCooldownMessage(response.error)) {
+                            const remaining = tracksToDownload.length - i - 1;
+                            toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
+                            logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
+                            break;
+                        }
                     }
-                    if (response.file) {
-                        finalFilePaths.set(id, response.file);
-                        finalFilePaths.set(track.spotify_id || id, response.file);
-                    }
-                    setDownloadedTracks((prev) => new Set(prev).add(id));
-                    setFailedTracks((prev) => {
-                        const newSet = new Set(prev);
-                        newSet.delete(id);
-                        return newSet;
-                    });
                 }
-                else {
+                catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
                     errorCount++;
-                    logger.error(`failed: ${track.name} - ${displayArtist}`);
-                    failedErrorMessages.set(id, translateMessage(response.error || t("translation.download.downloadFailed")));
+                    logger.error(`error: ${track.name} - ${err}`);
+                    failedErrorMessages.set(id, translateMessage(message));
                     setFailedTracks((prev) => new Set(prev).add(id));
-                    if (isCooldownMessage(response.error)) {
+                    if (itemID) {
+                        const { MarkDownloadItemFailed } = await import("../../wailsjs/go/main/App");
+                        await MarkDownloadItemFailed(itemID, message);
+                    }
+                    if (isCooldownMessage(message)) {
                         const remaining = tracksToDownload.length - i - 1;
                         toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
                         logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
-                        updateBatchProgress(skippedCount + successCount + errorCount, total);
                         break;
                     }
                 }
             }
+            const wasStopped = shouldStopDownloadRef.current;
+            try {
+                const { CancelAllQueuedItems } = await import("../../wailsjs/go/main/App");
+                await CancelAllQueuedItems();
+            }
             catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                errorCount++;
-                logger.error(`error: ${track.name} - ${err}`);
-                failedErrorMessages.set(id, translateMessage(message));
-                setFailedTracks((prev) => new Set(prev).add(id));
-                if (itemID) {
-                    const { MarkDownloadItemFailed } = await import("../../wailsjs/go/main/App");
-                    await MarkDownloadItemFailed(itemID, message);
-                }
-                if (isCooldownMessage(message)) {
-                    const remaining = tracksToDownload.length - i - 1;
-                    toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
-                    logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
-                    updateBatchProgress(skippedCount + successCount + errorCount, total);
-                    break;
+                logger.error(`failed to clear queued download items: ${err}`);
+            }
+            if (settings.autoReplayGainTags && completedSpotifyIDs.size > 0) {
+                const albumPaths = !wasStopped && errorCount === 0 && isAlbum && settings.autoReplayGainMode === "album"
+                    ? getCompleteAlbumPaths(selectedTrackObjects, finalFilePaths, completedSpotifyIDs)
+                    : null;
+                const trackPaths = getCompletedTrackPaths(selectedTrackObjects, finalFilePaths, completedSpotifyIDs);
+                await applyAutomaticReplayGain(albumPaths || trackPaths, albumPaths !== null);
+            }
+            if (settings.createM3u8File && folderName) {
+                const paths = selectedTrackObjects.map((t) => finalFilePaths.get(t.spotify_id || "") || "").filter((p) => p !== "");
+                if (paths.length > 0) {
+                    try {
+                        logger.info(`creating m3u8 playlist: ${folderName}`);
+                        await CreateM3U8File(folderName, outputDir, paths);
+                        toast.success(t("translation.download.m3u8PlaylistCreated"));
+                    }
+                    catch (err) {
+                        logger.error(`failed to create m3u8 playlist: ${err}`);
+                        toast.error(t("translation.migrated.useDownload.failedToCreateM3U8Playlist", { value1: err }));
+                    }
                 }
             }
-            const completedCount = skippedCount + successCount + errorCount;
-            updateBatchProgress(completedCount, total);
+            if (settings.exportLogsFile && folderName) {
+                const logsToExport: string[] = [];
+                logsToExport.push(`Download Report - ${new Date().toLocaleString()}`);
+                logsToExport.push("-".repeat(50));
+                logsToExport.push("");
+                let failedCount = 0;
+                selectedTrackObjects.forEach((t) => {
+                    const spotifyID = t.spotify_id || "";
+                    const errorMessage = failedErrorMessages.get(spotifyID);
+                    const isFailed = !!errorMessage;
+                    const isSkipped = existingSpotifyIDs.has(spotifyID);
+                    const isSuccess = !!finalFilePaths.get(spotifyID);
+                    const displayArtist = t.artists;
+                    if (isFailed) {
+                        failedCount++;
+                        logsToExport.push(`${failedCount}. ${t.name} - ${displayArtist}${t.album_name ? ` (${t.album_name})` : ""}`);
+                        logsToExport.push(`   Error: ${errorMessage}`);
+                        if (spotifyID) {
+                            logsToExport.push(`   ID: ${spotifyID}`);
+                            logsToExport.push(`   URL: https://open.spotify.com/track/${spotifyID}`);
+                        }
+                        logsToExport.push("");
+                    }
+                    else if (!settings.exportLogsOnlyFailed) {
+                        if (isSkipped) {
+                            logsToExport.push(`[SKIPPED] ${t.name} - ${displayArtist}`);
+                        }
+                        else if (isSuccess) {
+                            logsToExport.push(`[SUCCESS] ${t.name} - ${displayArtist}`);
+                        }
+                    }
+                });
+                if (failedCount > 0) {
+                    try {
+                        logger.info(`creating log file: ${folderName}`);
+                        await CreateLogFile(folderName, outputDir, logsToExport);
+                        toast.success(t("translation.download.downloadLogCreated"));
+                    }
+                    catch (err) {
+                        logger.error(`failed to create log file: ${err}`);
+                    }
+                }
+            }
+            logger.info(`batch complete: ${successCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`);
+            if (errorCount === 0 && skippedCount === 0) {
+                toast.success(t("translation.download.completed", { count: successCount }));
+            }
+            else if (errorCount === 0 && successCount === 0) {
+                toast.info(t("translation.download.exists", { count: skippedCount }));
+            }
+            else if (errorCount === 0) {
+                toast.info(t("translation.migrated.useDownload.downloadedSkipped", { value1: successCount, value2: skippedCount }));
+            }
+            else {
+                toast.warning(t("translation.download.summary", { downloaded: successCount, skipped: skippedCount, failed: errorCount }));
+            }
+            const result = buildQueueExecutionResult(selectedTrackObjects, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, wasStopped);
+            if (!queueItemId)
+                finishDirectQueueItem(directQueueItemId, result);
+            return result;
         }
-        const wasStopped = shouldStopDownloadRef.current;
-        setDownloadingTrack(null);
-        setCurrentDownloadInfo(null);
-        setIsDownloading(false);
-        setBulkDownloadType(null);
-        updateBatchProgress(0, 0);
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.error(`batch download failed: ${message}`);
+            toast.error(translateMessage(message));
+            const result = buildFailedQueueExecutionResult(selectedTrackObjects, message, shouldStopDownloadRef.current);
+            if (!queueItemId)
+                finishDirectQueueItem(directQueueItemId, result);
+            return result;
+        }
+        finally {
+            resetBatchDownloadState();
+        }
+    };
+    const handleDownloadAll = async (tracks: TrackMetadata[], folderName?: string, isAlbum?: boolean, batchSource: BatchDownloadSource = "collection", queueItemId?: string, resumeContext?: QueueResumeContext) => {
+        const settings = getSettings();
+        const candidateTracksWithID = tracks.filter((track) => track.spotify_id);
+        if (candidateTracksWithID.length === 0) {
+            toast.error(t("translation.download.noTracksAvailableDownload"));
+            return;
+        }
+        const tracksWithId = settings.redownloadWithSuffix
+            ? candidateTracksWithID
+            : deduplicateTracksBySpotifyID(candidateTracksWithID);
+        const directQueueItemId = queueItemId || beginDirectCollectionQueueItem({
+            type: queueCollectionType(isAlbum ? "album" : batchSource, tracksWithId), name: folderName || tracksWithId[0]?.album_name || t("translation.queue.queue"),
+            artist: tracksWithId[0]?.album_artist || tracksWithId[0]?.artists || "",
+            info: `${tracksWithId.length} ${t("translation.common.tracks")}`, image: tracksWithId[0]?.images || "",
+            folderName, isAlbum, tracks: tracksWithId,
+        });
+        logger.info(`starting batch download: ${tracksWithId.length} tracks`);
+        const collectionTracks = resumeContext?.allTracks?.length ? resumeContext.allTracks : candidateTracksWithID;
+        const collectionTrackPositions = new Map<string, number>();
+        collectionTracks.forEach((track, index) => {
+            const spotifyID = track.spotify_id || "";
+            if (spotifyID && !collectionTrackPositions.has(spotifyID))
+                collectionTrackPositions.set(spotifyID, index + 1);
+        });
+        const queueTrackFilePaths = new Map<string, string>(Object.entries(resumeContext?.trackFilePaths || {}));
         shouldStopDownloadRef.current = false;
-        const { CancelAllQueuedItems } = await import("../../wailsjs/go/main/App");
-        await CancelAllQueuedItems();
-        if (settings.createM3u8File && folderName) {
-            const paths = selectedTrackObjects.map((t) => finalFilePaths.get(t.spotify_id || "") || "").filter((p) => p !== "");
-            if (paths.length > 0) {
+        shouldPauseDownloadRef.current = false;
+        setIsDownloading(true);
+        try {
+            let outputDir = settings.downloadPath;
+            const os = settings.operatingSystem;
+            const useAlbumTag = settings.folderTemplate?.includes("{album}");
+            if (settings.createPlaylistFolder && folderName && (!isAlbum || !useAlbumTag)) {
+                outputDir = joinPath(os, outputDir, sanitizePath(folderName.replace(/\//g, " "), os));
+            }
+            logger.info(`checking existing files in parallel...`);
+            const useAlbumTrackNumber = templateUsesAlbumTrackNumber(settings);
+            const albumFilenameTemplate = getEffectiveAlbumFilenameTemplate(settings);
+            const audioFormat = getExpectedAudioFormat(settings);
+            const existenceChecks = tracksWithId.map((track, index) => {
+                const displayArtist = track.artists ? getFirstArtist(track.artists) : track.artists;
+                const displayAlbumArtist = track.album_artist ? getFirstArtist(track.album_artist) : track.album_artist;
+                return {
+                    spotify_id: track.spotify_id || "",
+                    track_name: track.name || "",
+                    artist_name: displayArtist || "",
+                    artists: track.artists || "",
+                    album_name: track.album_name || "",
+                    album_artist: displayAlbumArtist || "",
+                    album_artists: track.album_artist || "",
+                    category: getAlbumCategoryLabel(track.album_type),
+                    upc: track.upc || "",
+                    release_date: track.release_date || "",
+                    isrc: track.isrc || undefined,
+                    track_number: track.track_number || 0,
+                    disc_number: track.disc_number || 0,
+                    total_tracks: track.total_tracks || 0,
+                    total_discs: track.total_discs || 0,
+                    position: collectionTrackPositions.get(track.spotify_id || "") || index + 1,
+                    use_album_track_number: useAlbumTrackNumber,
+                    filename_format: albumFilenameTemplate || "",
+                    include_track_number: settings.trackNumber || false,
+                    audio_format: audioFormat,
+                };
+            });
+            const existenceResults = await CheckFilesExistence(outputDir, settings.downloadPath, existenceChecks);
+            const finalFilePaths: string[] = new Array(tracksWithId.length).fill("");
+            const existingSpotifyIDs = new Set<string>();
+            const existingFilePaths = new Map<string, string>();
+            for (let i = 0; i < existenceResults.length; i++) {
+                const result = existenceResults[i];
+                if (result.exists) {
+                    existingSpotifyIDs.add(result.spotify_id);
+                    existingFilePaths.set(result.spotify_id, result.file_path || "");
+                    finalFilePaths[i] = result.file_path || "";
+                    if (result.file_path) {
+                        queueTrackFilePaths.set(result.spotify_id, result.file_path);
+                    }
+                    updateQueueTrackResult(directQueueItemId, result.spotify_id, "skipped", result.file_path || undefined);
+                }
+            }
+            logger.info(`found ${existingSpotifyIDs.size} existing files`);
+            const { AddToDownloadQueue } = await import("../../wailsjs/go/main/App");
+            const itemIDs: string[] = [];
+            for (const track of tracksWithId) {
+                const displayArtist = track.artists;
+                const itemID = await AddToDownloadQueue(track.spotify_id || "", track.name || "", displayArtist || "", track.album_name || "");
+                itemIDs.push(itemID);
+                const trackID = track.spotify_id || "";
+                if (existingSpotifyIDs.has(trackID)) {
+                    const filePath = existingFilePaths.get(trackID) || "";
+                    setTimeout(() => SkipDownloadItem(itemID, filePath), 10);
+                    setSkippedTracks((prev: Set<string>) => new Set(prev).add(trackID));
+                    setDownloadedTracks((prev: Set<string>) => new Set(prev).add(trackID));
+                }
+            }
+            const tracksToDownload = tracksWithId
+                .map((track, originalIndex) => ({ track, originalIndex }))
+                .filter(({ track }) => !existingSpotifyIDs.has(track.spotify_id || ""));
+            let successCount = 0;
+            let errorCount = 0;
+            let skippedCount = existingSpotifyIDs.size;
+            const failedErrorMessages = new Map<string, string>();
+            const completedSpotifyIDs = new Set<string>();
+            for (let i = 0; i < tracksToDownload.length; i++) {
+                if (shouldStopDownloadRef.current || shouldPauseDownloadRef.current) {
+                    if (shouldStopDownloadRef.current) {
+                        toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
+                    }
+                    break;
+                }
+                const { track, originalIndex } = tracksToDownload[i];
+                const itemID = itemIDs[originalIndex];
+                const trackId = track.spotify_id || "";
+                setDownloadingTrack(trackId);
+                const displayArtist = track.artists;
+                try {
+                    const releaseYear = track.release_date?.substring(0, 4);
+                    const collectionPosition = collectionTrackPositions.get(trackId) || originalIndex + 1;
+                    const response = await downloadWithItemID(settings, itemID, track.name, track.artists, track.album_name, folderName, collectionPosition, track.spotify_id, track.duration_ms, isAlbum, releaseYear, track.album_artist || "", track.release_date, track.images, track.track_number, track.disc_number, track.total_tracks, track.total_discs, track.copyright, track.publisher);
+                    if (response.cancelled || shouldStopDownloadRef.current) {
+                        toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
+                        break;
+                    }
+                    if (response.success) {
+                        if (response.already_exists) {
+                            skippedCount++;
+                            existingSpotifyIDs.add(trackId);
+                            logger.info(`skipped: ${track.name} - ${displayArtist} (already exists)`);
+                            setSkippedTracks((prev) => new Set(prev).add(trackId));
+                        }
+                        else {
+                            successCount++;
+                            completedSpotifyIDs.add(trackId);
+                            logger.success(`downloaded: ${track.name} - ${displayArtist}${formatSourceSuffix(response)}`);
+                        }
+                        setDownloadedTracks((prev) => new Set(prev).add(trackId));
+                        setFailedTracks((prev) => {
+                            const newSet = new Set(prev);
+                            newSet.delete(trackId);
+                            return newSet;
+                        });
+                        if (response.file) {
+                            finalFilePaths[originalIndex] = response.file;
+                            queueTrackFilePaths.set(trackId, response.file);
+                        }
+                        updateQueueTrackResult(directQueueItemId, trackId, response.already_exists ? "skipped" : "done", response.file || undefined);
+                    }
+                    else {
+                        errorCount++;
+                        logger.error(`failed: ${track.name} - ${displayArtist}`);
+                        failedErrorMessages.set(trackId, translateMessage(response.error || t("translation.download.downloadFailed")));
+                        setFailedTracks((prev) => new Set(prev).add(trackId));
+                        updateQueueTrackResult(directQueueItemId, trackId, "failed");
+                        if (isCooldownMessage(response.error)) {
+                            const remaining = tracksToDownload.length - i - 1;
+                            toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
+                            logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
+                            break;
+                        }
+                    }
+                }
+                catch (err) {
+                    const message = err instanceof Error ? err.message : String(err);
+                    errorCount++;
+                    logger.error(`error: ${track.name} - ${err}`);
+                    failedErrorMessages.set(trackId, translateMessage(message));
+                    setFailedTracks((prev) => new Set(prev).add(trackId));
+                    updateQueueTrackResult(directQueueItemId, trackId, "failed");
+                    const { MarkDownloadItemFailed } = await import("../../wailsjs/go/main/App");
+                    await MarkDownloadItemFailed(itemID, message);
+                    if (isCooldownMessage(message)) {
+                        const remaining = tracksToDownload.length - i - 1;
+                        toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
+                        logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
+                        break;
+                    }
+                }
+            }
+            const wasStopped = shouldStopDownloadRef.current;
+            const wasPaused = shouldPauseDownloadRef.current && !wasStopped;
+            try {
+                const { CancelAllQueuedItems: CancelQueued } = await import("../../wailsjs/go/main/App");
+                await CancelQueued();
+            }
+            catch (err) {
+                logger.error(`failed to clear queued download items: ${err}`);
+            }
+            const resultFilePaths = Object.fromEntries(queueTrackFilePaths);
+            if (wasPaused) {
+                logger.info(`batch paused: ${successCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`);
+                const result = buildQueueExecutionResult(tracksWithId, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, false, true, resultFilePaths);
+                if (!queueItemId)
+                    finishDirectQueueItem(directQueueItemId, result);
+                return result;
+            }
+            if (wasStopped) {
+                if (settings.autoReplayGainTags) {
+                    const replayGainCompletedIDs = new Set<string>([
+                        ...Object.entries(resumeContext?.trackResults || {}).filter(([, status]) => status === "done").map(([trackID]) => trackID),
+                        ...completedSpotifyIDs,
+                    ]);
+                    const trackPaths = getCompletedTrackPaths(collectionTracks, queueTrackFilePaths, replayGainCompletedIDs);
+                    await applyAutomaticReplayGain(trackPaths, false);
+                }
+                const result = buildQueueExecutionResult(tracksWithId, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, true, false, resultFilePaths);
+                if (!queueItemId)
+                    finishDirectQueueItem(directQueueItemId, result);
+                return result;
+            }
+            if (settings.autoReplayGainTags) {
+                const replayGainCompletedIDs = new Set<string>([
+                    ...Object.entries(resumeContext?.trackResults || {}).filter(([, status]) => status === "done").map(([trackID]) => trackID),
+                    ...completedSpotifyIDs,
+                ]);
+                if (replayGainCompletedIDs.size > 0) {
+                    const albumPaths = errorCount === 0 && isAlbum && settings.autoReplayGainMode === "album"
+                        ? getCompleteAlbumPaths(collectionTracks, queueTrackFilePaths, replayGainCompletedIDs)
+                        : null;
+                    const trackPaths = getCompletedTrackPaths(collectionTracks, queueTrackFilePaths, replayGainCompletedIDs);
+                    await applyAutomaticReplayGain(albumPaths || trackPaths, albumPaths !== null);
+                }
+            }
+            if (settings.createM3u8File && folderName) {
                 try {
                     logger.info(`creating m3u8 playlist: ${folderName}`);
+                    const currentTrackIndex = new Map(tracksWithId.map((track, index) => [track.spotify_id || "", index]));
+                    const paths = collectionTracks.map((track) => {
+                        const trackID = track.spotify_id || "";
+                        const index = currentTrackIndex.get(trackID);
+                        return index !== undefined ? finalFilePaths[index] || "" : queueTrackFilePaths.get(trackID) || "";
+                    }).filter((path) => path !== "");
                     await CreateM3U8File(folderName, outputDir, paths);
                     toast.success(t("translation.download.m3u8PlaylistCreated"));
                 }
@@ -1145,315 +1551,90 @@ export function useDownload() {
                     toast.error(t("translation.migrated.useDownload.failedToCreateM3U8Playlist", { value1: err }));
                 }
             }
-        }
-        if (settings.exportLogsFile && folderName) {
-            const logsToExport: string[] = [];
-            logsToExport.push(`Download Report - ${new Date().toLocaleString()}`);
-            logsToExport.push("-".repeat(50));
-            logsToExport.push("");
-            let failedCount = 0;
-            selectedTrackObjects.forEach((t) => {
-                const spotifyID = t.spotify_id || "";
-                const errorMessage = failedErrorMessages.get(spotifyID);
-                const isFailed = !!errorMessage;
-                const isSkipped = existingSpotifyIDs.has(spotifyID);
-                const isSuccess = !!finalFilePaths.get(spotifyID);
-                const displayArtist = t.artists;
-                if (isFailed) {
-                    failedCount++;
-                    logsToExport.push(`${failedCount}. ${t.name} - ${displayArtist}${t.album_name ? ` (${t.album_name})` : ""}`);
-                    logsToExport.push(`   Error: ${errorMessage}`);
-                    if (spotifyID) {
-                        logsToExport.push(`   ID: ${spotifyID}`);
-                        logsToExport.push(`   URL: https://open.spotify.com/track/${spotifyID}`);
+            if (settings.exportLogsFile && folderName) {
+                const logsToExport: string[] = [];
+                logsToExport.push(`Download Report - ${new Date().toLocaleString()}`);
+                logsToExport.push("-".repeat(50));
+                logsToExport.push("");
+                let failedCount = 0;
+                tracksWithId.forEach((t, idx) => {
+                    const spotifyID = t.spotify_id || "";
+                    const errorMessage = failedErrorMessages.get(spotifyID);
+                    const isFailed = !!errorMessage;
+                    const isSkipped = existingSpotifyIDs.has(spotifyID);
+                    const isSuccess = !!finalFilePaths[idx];
+                    const displayArtist = t.artists;
+                    if (isFailed) {
+                        failedCount++;
+                        logsToExport.push(`${failedCount}. ${t.name} - ${displayArtist}${t.album_name ? ` (${t.album_name})` : ""}`);
+                        logsToExport.push(`   Error: ${errorMessage}`);
+                        if (spotifyID) {
+                            logsToExport.push(`   ID: ${spotifyID}`);
+                            logsToExport.push(`   URL: https://open.spotify.com/track/${spotifyID}`);
+                        }
+                        logsToExport.push("");
                     }
-                    logsToExport.push("");
-                }
-                else if (!settings.exportLogsOnlyFailed) {
-                    if (isSkipped) {
-                        logsToExport.push(`[SKIPPED] ${t.name} - ${displayArtist}`);
+                    else if (!settings.exportLogsOnlyFailed) {
+                        if (isSkipped) {
+                            logsToExport.push(`[SKIPPED] ${t.name} - ${displayArtist}`);
+                        }
+                        else if (isSuccess) {
+                            logsToExport.push(`[SUCCESS] ${t.name} - ${displayArtist}`);
+                        }
                     }
-                    else if (isSuccess) {
-                        logsToExport.push(`[SUCCESS] ${t.name} - ${displayArtist}`);
+                });
+                if (failedCount > 0) {
+                    try {
+                        logger.info(`creating log file: ${folderName}`);
+                        await CreateLogFile(folderName, outputDir, logsToExport);
+                        toast.success(t("translation.download.downloadLogCreated"));
                     }
-                }
-            });
-            if (failedCount > 0) {
-                try {
-                    logger.info(`creating log file: ${folderName}`);
-                    await CreateLogFile(folderName, outputDir, logsToExport);
-                    toast.success(t("translation.download.downloadLogCreated"));
-                }
-                catch (err) {
-                    logger.error(`failed to create log file: ${err}`);
+                    catch (err) {
+                        logger.error(`failed to create log file: ${err}`);
+                    }
                 }
             }
+            logger.info(`batch complete: ${successCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`);
+            if (errorCount === 0 && skippedCount === 0) {
+                toast.success(t("translation.download.completed", { count: successCount }));
+            }
+            else if (errorCount === 0 && successCount === 0) {
+                toast.info(t("translation.download.exists", { count: skippedCount }));
+            }
+            else if (errorCount === 0) {
+                toast.info(t("translation.migrated.useDownload.downloadedSkipped", { value1: successCount, value2: skippedCount }));
+            }
+            else {
+                toast.warning(t("translation.download.summary", { downloaded: successCount, skipped: skippedCount, failed: errorCount }));
+            }
+            const result = buildQueueExecutionResult(tracksWithId, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, false, false, resultFilePaths);
+            if (!queueItemId)
+                finishDirectQueueItem(directQueueItemId, result);
+            return result;
         }
-        logger.info(`batch complete: ${successCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`);
-        if (errorCount === 0 && skippedCount === 0) {
-            toast.success(t("translation.download.completed", { count: successCount }));
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.error(`batch download failed: ${message}`);
+            toast.error(translateMessage(message));
+            const result = buildFailedQueueExecutionResult(tracksWithId, message, shouldStopDownloadRef.current);
+            if (!queueItemId)
+                finishDirectQueueItem(directQueueItemId, result);
+            return result;
         }
-        else if (errorCount === 0 && successCount === 0) {
-            toast.info(t("translation.download.exists", { count: skippedCount }));
+        finally {
+            resetBatchDownloadState();
         }
-        else if (errorCount === 0) {
-            toast.info(t("translation.migrated.useDownload.downloadedSkipped", { value1: successCount, value2: skippedCount }));
-        }
-        else {
-            toast.warning(t("translation.download.summary", { downloaded: successCount, skipped: skippedCount, failed: errorCount }));
-        }
-        const result = buildQueueExecutionResult(selectedTrackObjects, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, wasStopped);
-        if (!queueItemId)
-            finishDirectQueueItem(directQueueItemId, result);
-        return result;
     };
-    const handleDownloadAll = async (tracks: TrackMetadata[], folderName?: string, isAlbum?: boolean, batchSource: BatchDownloadSource = "collection", queueItemId?: string) => {
-        const tracksWithId = tracks.filter((track) => track.spotify_id);
-        if (tracksWithId.length === 0) {
-            toast.error(t("translation.download.noTracksAvailableDownload"));
-            return;
-        }
-        const directQueueItemId = queueItemId || beginDirectCollectionQueueItem({
-            type: queueCollectionType(isAlbum ? "album" : batchSource, tracksWithId), name: folderName || tracksWithId[0]?.album_name || t("translation.queue.queue"),
-            artist: tracksWithId[0]?.album_artist || tracksWithId[0]?.artists || "",
-            info: `${tracksWithId.length} ${t("translation.common.tracks")}`, image: tracksWithId[0]?.images || "",
-            folderName, isAlbum, tracks: tracksWithId,
-        });
-        logger.info(`starting batch download: ${tracksWithId.length} tracks`);
-        const settings = getSettings();
-        setIsDownloading(true);
-        setBulkDownloadType("all");
-        setDownloadProgress(0);
-        setDownloadRemainingCount(tracksWithId.length);
-        setCurrentDownloadInfo(null);
-        let outputDir = settings.downloadPath;
-        const os = settings.operatingSystem;
-        const useAlbumTag = settings.folderTemplate?.includes("{album}");
-        if (settings.createPlaylistFolder && folderName && (!isAlbum || !useAlbumTag)) {
-            outputDir = joinPath(os, outputDir, sanitizePath(folderName.replace(/\//g, " "), os));
-        }
-        logger.info(`checking existing files in parallel...`);
-        const useAlbumTrackNumber = templateUsesAlbumTrackNumber(settings);
-        const albumFilenameTemplate = getEffectiveAlbumFilenameTemplate(settings);
-        const audioFormat = "flac";
-        const existenceChecks = tracksWithId.map((track, index) => {
-            const displayArtist = track.artists ? getFirstArtist(track.artists) : track.artists;
-            const displayAlbumArtist = track.album_artist ? getFirstArtist(track.album_artist) : track.album_artist;
-            return {
-                spotify_id: track.spotify_id || "",
-                track_name: track.name || "",
-                artist_name: displayArtist || "",
-                artists: track.artists || "",
-                album_name: track.album_name || "",
-                album_artist: displayAlbumArtist || "",
-                category: getAlbumCategoryLabel(track.album_type),
-                upc: track.upc || "",
-                release_date: track.release_date || "",
-                track_number: track.track_number || 0,
-                disc_number: track.disc_number || 0,
-                total_tracks: track.total_tracks || 0,
-                total_discs: track.total_discs || 0,
-                position: index + 1,
-                use_album_track_number: useAlbumTrackNumber,
-                filename_format: albumFilenameTemplate || "",
-                include_track_number: settings.trackNumber || false,
-                audio_format: audioFormat,
-            };
-        });
-        const existenceResults = await CheckFilesExistence(outputDir, settings.downloadPath, existenceChecks);
-        const finalFilePaths: string[] = new Array(tracksWithId.length).fill("");
-        const existingSpotifyIDs = new Set<string>();
-        const existingFilePaths = new Map<string, string>();
-        for (let i = 0; i < existenceResults.length; i++) {
-            const result = existenceResults[i];
-            if (result.exists) {
-                existingSpotifyIDs.add(result.spotify_id);
-                existingFilePaths.set(result.spotify_id, result.file_path || "");
-                finalFilePaths[i] = result.file_path || "";
-            }
-        }
-        logger.info(`found ${existingSpotifyIDs.size} existing files`);
-        const { AddToDownloadQueue } = await import("../../wailsjs/go/main/App");
-        const itemIDs: string[] = [];
-        for (const track of tracksWithId) {
-            const displayArtist = track.artists;
-            const itemID = await AddToDownloadQueue(track.spotify_id || "", track.name || "", displayArtist || "", track.album_name || "");
-            itemIDs.push(itemID);
-            const trackID = track.spotify_id || "";
-            if (existingSpotifyIDs.has(trackID)) {
-                const filePath = existingFilePaths.get(trackID) || "";
-                setTimeout(() => SkipDownloadItem(itemID, filePath), 10);
-                setSkippedTracks((prev: Set<string>) => new Set(prev).add(trackID));
-                setDownloadedTracks((prev: Set<string>) => new Set(prev).add(trackID));
-            }
-        }
-        const tracksToDownload = tracksWithId.filter((track) => {
-            const trackID = track.spotify_id || "";
-            return !existingSpotifyIDs.has(trackID);
-        });
-        let successCount = 0;
-        let errorCount = 0;
-        let skippedCount = existingSpotifyIDs.size;
-        const total = tracksWithId.length;
-        const failedErrorMessages = new Map<string, string>();
-        const completedSpotifyIDs = new Set<string>();
-        updateBatchProgress(skippedCount, total);
-        for (let i = 0; i < tracksToDownload.length; i++) {
-            if (shouldStopDownloadRef.current) {
-                toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
-                break;
-            }
-            const track = tracksToDownload[i];
-            const originalIndex = tracksWithId.findIndex((t) => t.spotify_id === track.spotify_id);
-            const itemID = itemIDs[originalIndex];
-            const trackId = track.spotify_id || "";
-            setDownloadingTrack(trackId);
-            const displayArtist = track.artists;
-            setCurrentDownloadInfo({ name: track.name || "", artists: displayArtist || "" });
-            try {
-                const releaseYear = track.release_date?.substring(0, 4);
-                const response = await downloadWithItemID(settings, itemID, track.name, track.artists, track.album_name, folderName, originalIndex + 1, track.spotify_id, track.duration_ms, isAlbum, releaseYear, track.album_artist || "", track.release_date, track.images, track.track_number, track.disc_number, track.total_tracks, track.total_discs, track.copyright, track.publisher);
-                if (response.cancelled || shouldStopDownloadRef.current) {
-                    toast.info(t("translation.download.stopped", { count: successCount, remaining: tracksToDownload.length - i }));
-                    break;
-                }
-                if (response.success) {
-                    if (response.already_exists) {
-                        skippedCount++;
-                        logger.info(`skipped: ${track.name} - ${displayArtist} (already exists)`);
-                        setSkippedTracks((prev) => new Set(prev).add(trackId));
-                    }
-                    else {
-                        successCount++;
-                        completedSpotifyIDs.add(trackId);
-                        logger.success(`downloaded: ${track.name} - ${displayArtist}${formatSourceSuffix(response)}`);
-                    }
-                    setDownloadedTracks((prev) => new Set(prev).add(trackId));
-                    setFailedTracks((prev) => {
-                        const newSet = new Set(prev);
-                        newSet.delete(trackId);
-                        return newSet;
-                    });
-                    if (response.file) {
-                        finalFilePaths[originalIndex] = response.file;
-                    }
-                }
-                else {
-                    errorCount++;
-                    logger.error(`failed: ${track.name} - ${displayArtist}`);
-                    failedErrorMessages.set(trackId, translateMessage(response.error || t("translation.download.downloadFailed")));
-                    setFailedTracks((prev) => new Set(prev).add(trackId));
-                    if (isCooldownMessage(response.error)) {
-                        const remaining = tracksToDownload.length - i - 1;
-                        toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
-                        logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
-                        updateBatchProgress(skippedCount + successCount + errorCount, total);
-                        break;
-                    }
-                }
-            }
-            catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                errorCount++;
-                logger.error(`error: ${track.name} - ${err}`);
-                failedErrorMessages.set(trackId, translateMessage(message));
-                setFailedTracks((prev) => new Set(prev).add(trackId));
-                const { MarkDownloadItemFailed } = await import("../../wailsjs/go/main/App");
-                await MarkDownloadItemFailed(itemID, message);
-                if (isCooldownMessage(message)) {
-                    const remaining = tracksToDownload.length - i - 1;
-                    toast.info(t("translation.migrated.useDownload.serversOnAScheduledBreakPausingDownloads"));
-                    logger.info(`cooldown detected, pausing queue with ${remaining} track(s) remaining`);
-                    updateBatchProgress(skippedCount + successCount + errorCount, total);
-                    break;
-                }
-            }
-            const completedCount = skippedCount + successCount + errorCount;
-            updateBatchProgress(completedCount, total);
-        }
-        const wasStopped = shouldStopDownloadRef.current;
-        setDownloadingTrack(null);
-        setCurrentDownloadInfo(null);
-        setIsDownloading(false);
-        setBulkDownloadType(null);
-        updateBatchProgress(0, 0);
-        shouldStopDownloadRef.current = false;
-        const { CancelAllQueuedItems: CancelQueued } = await import("../../wailsjs/go/main/App");
-        await CancelQueued();
-        if (settings.createM3u8File && folderName) {
-            try {
-                logger.info(`creating m3u8 playlist: ${folderName}`);
-                await CreateM3U8File(folderName, outputDir, finalFilePaths.filter(p => p !== ""));
-                toast.success(t("translation.download.m3u8PlaylistCreated"));
-            }
-            catch (err) {
-                logger.error(`failed to create m3u8 playlist: ${err}`);
-                toast.error(t("translation.migrated.useDownload.failedToCreateM3U8Playlist", { value1: err }));
-            }
-        }
-        if (settings.exportLogsFile && folderName) {
-            const logsToExport: string[] = [];
-            logsToExport.push(`Download Report - ${new Date().toLocaleString()}`);
-            logsToExport.push("-".repeat(50));
-            logsToExport.push("");
-            let failedCount = 0;
-            tracksWithId.forEach((t, idx) => {
-                const spotifyID = t.spotify_id || "";
-                const errorMessage = failedErrorMessages.get(spotifyID);
-                const isFailed = !!errorMessage;
-                const isSkipped = existingSpotifyIDs.has(spotifyID);
-                const isSuccess = !!finalFilePaths[idx];
-                const displayArtist = t.artists;
-                if (isFailed) {
-                    failedCount++;
-                    logsToExport.push(`${failedCount}. ${t.name} - ${displayArtist}${t.album_name ? ` (${t.album_name})` : ""}`);
-                    logsToExport.push(`   Error: ${errorMessage}`);
-                    if (spotifyID) {
-                        logsToExport.push(`   ID: ${spotifyID}`);
-                        logsToExport.push(`   URL: https://open.spotify.com/track/${spotifyID}`);
-                    }
-                    logsToExport.push("");
-                }
-                else if (!settings.exportLogsOnlyFailed) {
-                    if (isSkipped) {
-                        logsToExport.push(`[SKIPPED] ${t.name} - ${displayArtist}`);
-                    }
-                    else if (isSuccess) {
-                        logsToExport.push(`[SUCCESS] ${t.name} - ${displayArtist}`);
-                    }
-                }
-            });
-            if (failedCount > 0) {
-                try {
-                    logger.info(`creating log file: ${folderName}`);
-                    await CreateLogFile(folderName, outputDir, logsToExport);
-                    toast.success(t("translation.download.downloadLogCreated"));
-                }
-                catch (err) {
-                    logger.error(`failed to create log file: ${err}`);
-                }
-            }
-        }
-        logger.info(`batch complete: ${successCount} downloaded, ${skippedCount} skipped, ${errorCount} failed`);
-        if (errorCount === 0 && skippedCount === 0) {
-            toast.success(t("translation.download.completed", { count: successCount }));
-        }
-        else if (errorCount === 0 && successCount === 0) {
-            toast.info(t("translation.download.exists", { count: skippedCount }));
-        }
-        else if (errorCount === 0) {
-            toast.info(t("translation.migrated.useDownload.downloadedSkipped", { value1: successCount, value2: skippedCount }));
-        }
-        else {
-            toast.warning(t("translation.download.summary", { downloaded: successCount, skipped: skippedCount, failed: errorCount }));
-        }
-        const result = buildQueueExecutionResult(tracksWithId, existingSpotifyIDs, failedErrorMessages, completedSpotifyIDs, wasStopped);
-        if (!queueItemId)
-            finishDirectQueueItem(directQueueItemId, result);
-        return result;
+    const handlePauseDownload = () => {
+        logger.info("pausing batch after active download finishes");
+        shouldPauseDownloadRef.current = true;
+    };
+    const handleResumeDownload = () => {
+        shouldPauseDownloadRef.current = false;
     };
     const handleStopDownload = () => {
         logger.info("download stopped by user");
+        shouldPauseDownloadRef.current = false;
         shouldStopDownloadRef.current = true;
         void (async () => {
             try {
@@ -1467,23 +1648,22 @@ export function useDownload() {
         toast.info(t("translation.migrated.useDownload.stoppingDownload"));
     };
     const resetDownloadedTracks = () => {
-        setDownloadedTracks(new Set());
-        setFailedTracks(new Set());
-        setSkippedTracks(new Set());
+        const restoredQueueTrackStatuses = getQueueTrackStatusSets();
+        setDownloadedTracks(new Set(restoredQueueTrackStatuses.downloadedTracks));
+        setFailedTracks(new Set(restoredQueueTrackStatuses.failedTracks));
+        setSkippedTracks(new Set(restoredQueueTrackStatuses.skippedTracks));
     };
     return {
-        downloadProgress,
-        downloadRemainingCount,
         isDownloading,
         downloadingTrack,
-        bulkDownloadType,
         downloadedTracks,
         failedTracks,
         skippedTracks,
-        currentDownloadInfo,
         handleDownloadTrack,
         handleDownloadSelected,
         handleDownloadAll,
+        handlePauseDownload,
+        handleResumeDownload,
         handleStopDownload,
         resetDownloadedTracks,
     };

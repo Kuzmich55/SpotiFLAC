@@ -138,19 +138,19 @@ export function TitleBar({ canGoBack = false, canGoForward = false, navigationDi
       <div className="fixed top-0 left-14 right-0 h-10 z-40 bg-background/80 backdrop-blur-sm" style={{ "--wails-draggable": "drag" } as React.CSSProperties} onDoubleClick={handleMaximize}/>
 
       <div className="fixed top-1.5 left-16 z-50 flex h-7 items-center gap-0.5" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
-        <button type="button" onClick={onBack} disabled={!canGoBack || navigationDisabled} className="flex h-7 w-8 items-center justify-center rounded transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent" aria-label={t("translation.common.goPreviousPage")}><ArrowLeft className="h-3.5 w-3.5"/></button>
-        <button type="button" onClick={onForward} disabled={!canGoForward || navigationDisabled} className="flex h-7 w-8 items-center justify-center rounded transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent" aria-label={t("translation.common.goNextPage")}><ArrowRight className="h-3.5 w-3.5"/></button>
-        <button type="button" onClick={() => window.location.reload()} className="flex h-7 w-8 items-center justify-center rounded transition-colors hover:bg-muted" aria-label={t("translation.header.reload")}><RotateCw className="h-3.5 w-3.5"/></button>
+        <button type="button" onClick={onBack} disabled={!canGoBack || navigationDisabled} className="flex size-7 cursor-pointer items-center justify-center rounded transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent" aria-label={t("translation.common.goPreviousPage")}><ArrowLeft className="h-3.5 w-3.5"/></button>
+        <button type="button" onClick={onForward} disabled={!canGoForward || navigationDisabled} className="flex size-7 cursor-pointer items-center justify-center rounded transition-colors hover:bg-muted disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent" aria-label={t("translation.common.goNextPage")}><ArrowRight className="h-3.5 w-3.5"/></button>
+        <button type="button" onClick={() => window.location.reload()} className="flex size-7 cursor-pointer items-center justify-center rounded transition-colors hover:bg-muted" aria-label={t("translation.header.reload")}><RotateCw className="h-3.5 w-3.5"/></button>
       </div>
 
 
       <div className="fixed top-1.5 right-2 z-50 flex h-7 gap-0.5 items-center">
         <Menubar className="border-none bg-transparent shadow-none px-0 mr-1" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties}>
             <MenubarMenu>
-                <MenubarTrigger className="cursor-pointer w-8 h-7 p-0 flex items-center justify-center hover:bg-muted transition-colors rounded data-[state=open]:bg-muted">
+                <MenubarTrigger className="cursor-pointer size-7 p-0 flex items-center justify-center hover:bg-muted transition-colors rounded data-[state=open]:bg-muted">
                     <SlidersHorizontal className="w-3.5 h-3.5"/>
                 </MenubarTrigger>
-                <MenubarContent align="end" className="min-w-70">
+                <MenubarContent align="end" className="w-max max-w-[calc(100vw-1rem)]">
                     <div className="px-2 py-1.5 space-y-2">
                         <div className="flex items-center justify-between gap-3">
                             <MenubarLabel className="p-0">{t("translation.titleBar.previewVolume")}</MenubarLabel>
@@ -176,12 +176,12 @@ export function TitleBar({ canGoBack = false, canGoForward = false, navigationDi
             ? t("translation.migrated.TitleBar.detecting")
             : currentIPInfo
                 ? showIPAddress
-                    ? t("translation.titleBar.value1Value2Value3", { value1: currentIPInfo.ip, value2: currentIPInfo.country, value3: detectedCountryCode ? `(${detectedCountryCode})` : "" })
+                    ? currentIPInfo.ip
                     : t("translation.titleBar.value1Value2", { value1: currentIPInfo.country, value2: detectedCountryCode ? `(${detectedCountryCode})` : "" })
                 : t("translation.migrated.TitleBar.unavailable")}
                                 </span>
                             </div>
-                            {currentIPInfo && !isLoadingCurrentIPInfo && (<button type="button" onClick={() => setShowIPAddress((prev) => !prev)} className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" aria-label={showIPAddress ? t("translation.migrated.TitleBar.hideIP") : t("translation.migrated.TitleBar.showIP")}>
+                            {currentIPInfo && !isLoadingCurrentIPInfo && (<button type="button" onClick={() => setShowIPAddress((prev) => !prev)} className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors" aria-label={showIPAddress ? t("translation.migrated.TitleBar.hideIP") : t("translation.migrated.TitleBar.showIP")}>
                                 {showIPAddress ? <EyeOff className="h-3.5 w-3.5"/> : <Eye className="h-3.5 w-3.5"/>}
                             </button>)}
                         </div>
@@ -190,20 +190,20 @@ export function TitleBar({ canGoBack = false, canGoForward = false, navigationDi
                         </div>)}
                     </div>
                     <MenubarSeparator />
-                    <MenubarItem onClick={() => openExternal("https://afkarxyz.fyi")} className="gap-2">
+                    <MenubarItem onClick={() => openExternal("https://afkarxyz.fyi")} className="cursor-pointer gap-2">
                         <Globe className="w-4 h-4 opacity-70"/>
                         <span>{t("translation.titleBar.website")}</span>
                     </MenubarItem>
                 </MenubarContent>
             </MenubarMenu>
         </Menubar>
-        <button onClick={handleMinimize} className="w-8 h-7 flex items-center justify-center hover:bg-muted transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.titleBar.minimize")}>
+        <button onClick={handleMinimize} className="size-7 cursor-pointer flex items-center justify-center hover:bg-muted transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.titleBar.minimize")}>
           <Minus className="w-3.5 h-3.5"/>
         </button>
-        <button onClick={handleMaximize} className="w-8 h-7 flex items-center justify-center hover:bg-muted transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.titleBar.maximize")}>
+        <button onClick={handleMaximize} className="size-7 cursor-pointer flex items-center justify-center hover:bg-muted transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.titleBar.maximize")}>
           <Maximize className="w-3.5 h-3.5"/>
         </button>
-        <button onClick={handleClose} className="w-8 h-7 flex items-center justify-center hover:bg-destructive hover:text-white transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.common.close")}>
+        <button onClick={handleClose} className="size-7 cursor-pointer flex items-center justify-center hover:bg-destructive hover:text-white transition-colors rounded" style={{ "--wails-draggable": "no-drag" } as React.CSSProperties} aria-label={t("translation.common.close")}>
           <X className="w-3.5 h-3.5"/>
         </button>
       </div>

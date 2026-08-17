@@ -1,15 +1,14 @@
 import { t, translateMessage } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Download, FolderOpen, ImageDown, FileText, BadgeCheck, XCircle, Filter, CloudDownload, CheckCheck, ListPlus, Check } from "lucide-react";
+import { FolderOpen, ImageDown, FileText, BadgeCheck, XCircle, Filter, CloudDownload, CheckCheck, ListPlus, CircleCheck } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SearchAndSort } from "./SearchAndSort";
 import { TrackList } from "./TrackList";
-import { DownloadProgress } from "./DownloadProgress";
 import type { TrackMetadata, TrackAvailability } from "@/types/api";
 import { downloadHeader, downloadGalleryImage, downloadAvatar } from "@/lib/api";
-import { getSettings } from "@/lib/settings";
+import { getAlbumCategoryLabel, getSettings } from "@/lib/settings";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
 import { useState, useMemo } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,6 +16,25 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQueueFeedback } from "@/hooks/useQueueFeedback";
 import { addCollectionToQueue } from "@/lib/queue";
+const SINGLE_ALBUM_TYPES = new Set(["single", "singles"]);
+const EP_ALBUM_TYPES = new Set(["ep", "eps"]);
+const AMBIGUOUS_SINGLE_EP_TYPES = new Set(["epsingle", "singleep"]);
+const ALBUM_FILTER_ORDER = ["single", "ep", "single_ep", "album", "compilation", "live", "appears_on"];
+const normalizeAlbumFilterType = (value: string) => {
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const compact = normalized.replace(/[^a-z]/g, "");
+    if (compact === "appearson")
+        return "appears_on";
+    if (AMBIGUOUS_SINGLE_EP_TYPES.has(compact))
+        return "single_ep";
+    if (EP_ALBUM_TYPES.has(compact))
+        return "ep";
+    return SINGLE_ALBUM_TYPES.has(compact) ? "single" : normalized;
+};
+const toTitleCaseLabel = (value: string) => value
+    .split(/(\s+)/)
+    .map((part) => part.trim() ? part.charAt(0).toLocaleUpperCase() + part.slice(1) : part)
+    .join("");
 interface ArtistInfoProps {
     artistInfo: {
         name: string;
@@ -48,15 +66,6 @@ interface ArtistInfoProps {
     downloadedTracks: Set<string>;
     failedTracks: Set<string>;
     skippedTracks: Set<string>;
-    downloadingTrack: string | null;
-    isDownloading: boolean;
-    bulkDownloadType: "all" | "selected" | null;
-    downloadProgress: number;
-    downloadRemainingCount: number;
-    currentDownloadInfo: {
-        name: string;
-        artists: string;
-    } | null;
     currentPage: number;
     itemsPerPage: number;
     downloadedLyrics?: Set<string>;
@@ -77,18 +86,14 @@ interface ArtistInfoProps {
     onToggleTrack: (id: string) => void;
     onToggleSelectAll: (tracks: TrackMetadata[]) => void;
     onSelectTrackRange?: (ids: string[], select: boolean) => void;
-    onDownloadTrack: (id: string, name: string, artists: string, albumName: string, spotifyId?: string, folderName?: string, durationMs?: number, position?: number, albumArtist?: string, releaseDate?: string, coverUrl?: string, spotifyTrackNumber?: number, spotifyDiscNumber?: number, spotifyTotalTracks?: number, spotifyTotalDiscs?: number, copyright?: string, publisher?: string) => void;
     onDownloadLyrics?: (spotifyId: string, name: string, artists: string, albumName: string, folderName?: string, isArtistDiscography?: boolean, position?: number, albumArtist?: string, releaseDate?: string, discNumber?: number) => void;
     onDownloadCover?: (coverUrl: string, trackName: string, artistName: string, albumName: string, folderName?: string, isArtistDiscography?: boolean, position?: number, trackId?: string, albumArtist?: string, releaseDate?: string, discNumber?: number) => void;
     onCheckAvailability?: (spotifyId: string) => void;
     onDownloadAllLyrics?: () => void;
     onDownloadAllCovers?: () => void;
-    onDownloadAll: () => void;
-    onDownloadSelected: () => void;
-    onQueueAll?: () => void;
+    onQueueAll: () => void;
     onQueueSelected?: () => void;
     onQueueTrack?: (track: TrackMetadata, position?: number) => void;
-    onStopDownload: () => void;
     onOpenFolder: () => void;
     onAlbumClick: (album: {
         id: string;
@@ -104,8 +109,10 @@ interface ArtistInfoProps {
     onTrackClick?: (track: TrackMetadata) => void;
     onBack?: () => void;
 }
-export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sortBy, selectedTracks, downloadedTracks, failedTracks, skippedTracks, downloadingTrack, isDownloading, bulkDownloadType, downloadProgress, downloadRemainingCount, currentDownloadInfo, currentPage, itemsPerPage, downloadedLyrics, failedLyrics, skippedLyrics, downloadingLyricsTrack, checkingAvailabilityTrack, availabilityMap, downloadedCovers, failedCovers, skippedCovers, downloadingCoverTrack, isBulkDownloadingCovers, isBulkDownloadingLyrics, isMetadataLoading = false, onSearchChange, onSortChange, onToggleTrack, onToggleSelectAll, onSelectTrackRange, onDownloadTrack, onDownloadLyrics, onDownloadCover, onCheckAvailability, onDownloadAllLyrics, onDownloadAllCovers, onDownloadAll, onDownloadSelected, onQueueAll, onQueueSelected, onQueueTrack, onStopDownload, onOpenFolder, onAlbumClick, onArtistClick, onPageChange, onTrackClick, onBack, }: ArtistInfoProps) {
-    const { flashQueued, isQueued } = useQueueFeedback();
+export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sortBy, selectedTracks, downloadedTracks, failedTracks, skippedTracks, currentPage, itemsPerPage, downloadedLyrics, failedLyrics, skippedLyrics, downloadingLyricsTrack, checkingAvailabilityTrack, availabilityMap, downloadedCovers, failedCovers, skippedCovers, downloadingCoverTrack, isBulkDownloadingCovers, isBulkDownloadingLyrics, isMetadataLoading = false, onSearchChange, onSortChange, onToggleTrack, onToggleSelectAll, onSelectTrackRange, onDownloadLyrics, onDownloadCover, onCheckAvailability, onDownloadAllLyrics, onDownloadAllCovers, onQueueAll, onQueueSelected, onQueueTrack, onOpenFolder, onAlbumClick, onArtistClick, onPageChange, onTrackClick, onBack, }: ArtistInfoProps) {
+    const { areQueued, isCollectionQueued } = useQueueFeedback();
+    const allTracksQueued = isCollectionQueued("artist", artistInfo.name) || areQueued((trackList || []).map((track) => track.spotify_id));
+    const selectedTracksQueued = areQueued(selectedTracks);
     const [downloadingHeader, setDownloadingHeader] = useState(false);
     const [downloadingAvatar, setDownloadingAvatar] = useState(false);
     const [downloadingGalleryIndex, setDownloadingGalleryIndex] = useState<number | null>(null);
@@ -129,7 +136,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
         const counts = new Map<string, number>();
         counts.set("all", (albumList || []).length);
         for (const album of albumList || []) {
-            const type = (album.album_type || "").trim().toLowerCase();
+            const type = normalizeAlbumFilterType(album.album_type || "");
             if (!type)
                 continue;
             counts.set(type, (counts.get(type) || 0) + 1);
@@ -138,15 +145,18 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
     }, [albumList]);
     const albumFilters = useMemo(() => {
         const uniqueTypes = Array.from(new Set((albumList || [])
-            .map((album) => (album.album_type || "").trim().toLowerCase())
+            .map((album) => normalizeAlbumFilterType(album.album_type || ""))
             .filter(Boolean)));
-        return ["all", ...uniqueTypes];
+        const orderedTypes = ALBUM_FILTER_ORDER.filter((type) => uniqueTypes.includes(type));
+        const remainingTypes = uniqueTypes.filter((type) => !ALBUM_FILTER_ORDER.includes(type));
+        return ["all", ...orderedTypes, ...remainingTypes];
     }, [albumList]);
     const filteredAlbums = useMemo(() => {
-        if (activeAlbumFilter === "all") {
+        const normalizedActiveFilter = normalizeAlbumFilterType(activeAlbumFilter);
+        if (normalizedActiveFilter === "all") {
             return albumList || [];
         }
-        return (albumList || []).filter((album) => (album.album_type || "").trim().toLowerCase() === activeAlbumFilter);
+        return (albumList || []).filter((album) => normalizeAlbumFilterType(album.album_type || "") === normalizedActiveFilter);
     }, [albumList, activeAlbumFilter]);
     const discographyTracks = useMemo(() => {
         const albumIds = new Set(filteredAlbums.map((album) => album.id));
@@ -210,18 +220,55 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
         const count = albumFilterCounts.get(value) || 0;
         if (value === "all")
             return `${t("translation.queue.all")} (${count})`;
-        const filterKeys: Record<string, string> = {
-            album: "translation.common.albums",
-            live: "translation.artistInfo.liveAlbums",
-            compilation: "translation.artistInfo.compilations",
-            single: "translation.artistInfo.singlesEps",
-            ep: "translation.artistInfo.singlesEps",
-            epsingle: "translation.artistInfo.singlesEps",
-            appears_on: "translation.artistInfo.otherReleases",
-            other: "translation.artistInfo.otherReleases",
-        };
-        const label = filterKeys[value] ? t(filterKeys[value]) : value;
-        return `${label} (${count})`;
+        const normalizedValue = normalizeAlbumFilterType(value);
+        const translatedCategory = normalizedValue === "album"
+            ? t("translation.common.albums")
+            : normalizedValue === "live"
+                ? t("translation.backend.live")
+                : normalizedValue === "compilation"
+                    ? t("translation.backend.compilation")
+                    : normalizedValue === "single"
+                        ? t("translation.artistInfo.singles")
+                        : normalizedValue === "ep"
+                            ? t("translation.artistInfo.eps")
+                            : normalizedValue === "single_ep"
+                                ? t("translation.artistInfo.singlesAndEps")
+                                : normalizedValue === "appears_on"
+                                    ? t("translation.artistInfo.appearsOn")
+                                    : "";
+        if (translatedCategory) {
+            return `${toTitleCaseLabel(translatedCategory)} (${count})`;
+        }
+        const categoryLabel = getAlbumCategoryLabel(value);
+        if (categoryLabel) {
+            return `${toTitleCaseLabel(categoryLabel)} (${count})`;
+        }
+        const label = value
+            .split(/[_\s]+/)
+            .filter(Boolean)
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+        return `${toTitleCaseLabel(label)} (${count})`;
+    };
+    const getAlbumTypeBadgeLabel = (value: string) => {
+        switch (normalizeAlbumFilterType(value || "")) {
+            case "album":
+                return toTitleCaseLabel(t("translation.common.album"));
+            case "live":
+                return toTitleCaseLabel(t("translation.backend.live"));
+            case "compilation":
+                return toTitleCaseLabel(t("translation.backend.compilation"));
+            case "single":
+                return toTitleCaseLabel(t("translation.backend.single"));
+            case "ep":
+                return toTitleCaseLabel(t("translation.backend.ep"));
+            case "single_ep":
+                return toTitleCaseLabel(t("translation.artistInfo.singlesAndEps"));
+            case "appears_on":
+                return toTitleCaseLabel(t("translation.artistInfo.appearsOn"));
+            default:
+                return toTitleCaseLabel(value || "");
+        }
     };
     const handleDownloadHeader = async () => {
         if (!artistInfo.header)
@@ -376,14 +423,14 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
               <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${artistInfo.header})` }}/>
               <div className="absolute inset-0 bg-linear-to-t from-black via-black/50 to-transparent"/>
               {onBack && (<div className="absolute top-4 right-4 z-10">
-                  <Button variant="ghost" size="icon" onClick={onBack} className="text-white hover:bg-white/20 hover:text-white">
+                  <Button variant="ghost" size="icon" onClick={onBack} className="text-white/70 hover:bg-transparent hover:text-white">
                       <XCircle className="h-5 w-5"/>
                   </Button>
               </div>)}
               <div className="absolute bottom-4 right-4 z-10">
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button onClick={handleDownloadHeader} size="sm" variant="secondary" disabled={downloadingHeader} className="bg-white/10 hover:bg-white/20 text-white border-white/20">
+                    <Button onClick={handleDownloadHeader} size="icon" variant="secondary" disabled={downloadingHeader} className="bg-white/10 hover:bg-white/20 text-white border-white/20">
                       {downloadingHeader ? (<Spinner className="h-4 w-4"/>) : (<ImageDown className="h-4 w-4"/>)}
                     </Button>
                   </TooltipTrigger>
@@ -399,7 +446,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors rounded-full flex items-center justify-center">
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button onClick={handleDownloadAvatar} size="sm" variant="secondary" disabled={downloadingAvatar} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
+                            <Button onClick={handleDownloadAvatar} size="icon" variant="secondary" disabled={downloadingAvatar} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
                               {downloadingAvatar ? (<Spinner className="h-4 w-4"/>) : (<ImageDown className="h-4 w-4"/>)}
                             </Button>
                           </TooltipTrigger>
@@ -442,7 +489,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
             </div>
           </>) : (<CardContent className="px-6 py-6">
             {onBack && (<div className="absolute top-4 right-4 z-10">
-                <Button variant="ghost" size="icon" onClick={onBack}>
+                <Button variant="ghost" size="icon" onClick={onBack} className="text-muted-foreground hover:bg-transparent hover:text-foreground">
                     <XCircle className="h-5 w-5"/>
                 </Button>
             </div>)}
@@ -452,7 +499,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors rounded-full flex items-center justify-center">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button onClick={handleDownloadAvatar} size="sm" variant="secondary" disabled={downloadingAvatar} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
+                        <Button onClick={handleDownloadAvatar} size="icon" variant="secondary" disabled={downloadingAvatar} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
                           {downloadingAvatar ? (<Spinner className="h-4 w-4"/>) : (<ImageDown className="h-4 w-4"/>)}
                         </Button>
                       </TooltipTrigger>
@@ -513,7 +560,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
             <h3 className="text-2xl font-bold">{t("translation.artistInfo.gallery2")}{artistInfo.gallery!.length.toLocaleString()})</h3>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button onClick={handleDownloadAllGallery} size="sm" variant="outline" disabled={downloadingAllGallery}>
+                <Button onClick={handleDownloadAllGallery} size="icon" variant="outline" disabled={downloadingAllGallery}>
                   {downloadingAllGallery ? <Spinner className="h-4 w-4"/> : <ImageDown className="h-4 w-4"/>}
                 </Button>
               </TooltipTrigger>
@@ -529,7 +576,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button onClick={() => handleDownloadGalleryImage(imageUrl, index)} size="sm" variant="secondary" disabled={downloadingGalleryIndex === index} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
+                        <Button onClick={() => handleDownloadGalleryImage(imageUrl, index)} size="icon" variant="secondary" disabled={downloadingGalleryIndex === index} className="opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white border-white/20">
                           {downloadingGalleryIndex === index ? (<Spinner className="h-4 w-4"/>) : (<ImageDown className="h-4 w-4"/>)}
                         </Button>
                       </TooltipTrigger>
@@ -547,24 +594,19 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="text-2xl font-bold">{t("translation.artistInfo.discography")}</h3>
             <div className="flex gap-2">
-                {discographyTracksWithId.length > 0 && (<Button onClick={() => onToggleSelectAll(discographyTracks)} size="sm" variant="outline">
+                {discographyTracksWithId.length > 0 && (<Button onClick={() => onToggleSelectAll(discographyTracks)} size="default" variant="outline">
                     <CheckCheck className="h-4 w-4"/>
                     {allDiscographySelected ? t("translation.migrated.ArtistInfo.deselectAll") : t("translation.migrated.ArtistInfo.selectAll")}
                 </Button>)}
-                <Button onClick={onDownloadAll} size="sm" disabled={isDownloading}>
-                    {isDownloading && bulkDownloadType === "all" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                    {t("translation.artistInfo.downloadDiscography")}
+                <Button onClick={onQueueAll} size="default" variant={allTracksQueued ? "outline" : "default"}>
+                    {allTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}
+                    {t(allTracksQueued ? "translation.queue.alreadyInQueue" : "translation.queue.addToQueue")}
                 </Button>
-                {onQueueAll && (<Button onClick={() => { onQueueAll(); flashQueued("all"); }} size="sm" variant="outline">{isQueued("all") ? (<Check className="h-4 w-4 text-green-500"/>) : (<ListPlus className="h-4 w-4"/>)}{t("translation.queue.addDiscographyQueue")}</Button>)}
-                {selectedTracks.length > 0 && onQueueSelected && (<Button onClick={() => { queueSelectedAlbums(); flashQueued("selected"); }} size="sm" variant="outline">{isQueued("selected") ? (<Check className="h-4 w-4 text-green-500"/>) : (<ListPlus className="h-4 w-4"/>)}{t("translation.queue.addSelectedQueueValue1", { value1: selectedTracks.length.toLocaleString() })}</Button>)}
-                {selectedTracks.length > 0 && (<Button onClick={onDownloadSelected} size="sm" variant="secondary" disabled={isDownloading}>
-                        {isDownloading && bulkDownloadType === "selected" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                        {t("translation.migrated.ArtistInfo.downloadSelected")}{selectedTracks.length})
-                    </Button>)}
+                {selectedTracks.length > 0 && onQueueSelected && (<Button onClick={queueSelectedAlbums} size="default" variant="outline">{selectedTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}{selectedTracksQueued ? t("translation.queue.alreadyInQueue") : t("translation.queue.addSelectedQueueValue1", { value1: selectedTracks.length.toLocaleString() })}</Button>)}
             </div>
           </div>
           {albumFilters.length > 1 && (<div className="flex flex-wrap gap-2">
-              {albumFilters.map((filter) => (<Button key={filter} size="sm" variant={activeAlbumFilter === filter ? "default" : "outline"} onClick={() => setActiveAlbumFilter(filter)}>
+              {albumFilters.map((filter) => (<Button key={filter} size="default" variant={activeAlbumFilter === filter ? "default" : "outline"} onClick={() => setActiveAlbumFilter(filter)}>
                   {formatAlbumFilterLabel(filter)}
                 </Button>))}
             </div>)}
@@ -612,7 +654,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                   <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button size="icon" variant="secondary" className="h-7 w-7 bg-black/50 hover:bg-black/70 text-white border-white/20" onClick={(event) => { event.stopPropagation(); handleFetch(); }}>
+                        <Button size="icon" variant="secondary" className="bg-black/50 hover:bg-black/70 text-white border-white/20" onClick={(event) => { event.stopPropagation(); handleFetch(); }}>
                           <CloudDownload className="h-4 w-4"/>
                         </Button>
                       </TooltipTrigger>
@@ -624,7 +666,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                   {album.images && (<img src={album.images} alt={album.name} className="h-40 w-40 object-cover rounded-md shadow-md transition-shadow group-hover:shadow-xl"/>)}
                   <div className="absolute bottom-2 right-2">
                     <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-black/60 text-white backdrop-blur-[2px]">
-                        {album.album_type}
+                        {getAlbumTypeBadgeLabel(album.album_type)}
                     </span>
                   </div>
                 </div>
@@ -653,7 +695,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
             <div className="flex gap-2 flex-wrap">
               <Dialog>
                   <DialogTrigger asChild>
-                      <Button variant="outline" size="sm">
+                      <Button variant="outline" size="default">
                           <Filter className="h-4 w-4"/>
                           {t("translation.migrated.ArtistInfo.filterAlbums")}
                       </Button>
@@ -689,17 +731,17 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                       </ScrollArea>
                   </DialogContent>
               </Dialog>
-              <Button onClick={onDownloadAll} size="sm" disabled={isDownloading}>
-                {isDownloading && bulkDownloadType === "all" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                {t("translation.albumInfo.downloadAll")}
+              <Button onClick={onQueueAll} size="default" variant={allTracksQueued ? "outline" : "default"}>
+                {allTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}
+                {t(allTracksQueued ? "translation.queue.alreadyInQueue" : "translation.queue.addToQueue")}
               </Button>
-              {selectedTracks.length > 0 && (<Button onClick={onDownloadSelected} size="sm" variant="secondary" disabled={isDownloading}>
-                  {isDownloading && bulkDownloadType === "selected" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                  {t("translation.migrated.ArtistInfo.downloadSelected")}{selectedTracks.length.toLocaleString()})
+              {selectedTracks.length > 0 && onQueueSelected && (<Button onClick={onQueueSelected} size="default" variant="outline">
+                  {selectedTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}
+                  {selectedTracksQueued ? t("translation.queue.alreadyInQueue") : t("translation.queue.addSelectedQueueValue1", { value1: selectedTracks.length.toLocaleString() })}
                 </Button>)}
               {onDownloadAllLyrics && (<Tooltip>
                   <TooltipTrigger asChild>
-                    <Button onClick={onDownloadAllLyrics} size="icon-sm" variant="outline" disabled={isBulkDownloadingLyrics}>
+                    <Button onClick={onDownloadAllLyrics} size="icon" variant="outline" disabled={isBulkDownloadingLyrics}>
                       {isBulkDownloadingLyrics ? <Spinner /> : <FileText className="h-4 w-4"/>}
                     </Button>
                   </TooltipTrigger>
@@ -709,7 +751,7 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                 </Tooltip>)}
               {onDownloadAllCovers && (<Tooltip>
                   <TooltipTrigger asChild>
-                    <Button onClick={onDownloadAllCovers} size="icon-sm" variant="outline" disabled={isBulkDownloadingCovers}>
+                    <Button onClick={onDownloadAllCovers} size="icon" variant="outline" disabled={isBulkDownloadingCovers}>
                       {isBulkDownloadingCovers ? <Spinner /> : <ImageDown className="h-4 w-4"/>}
                     </Button>
                   </TooltipTrigger>
@@ -729,9 +771,8 @@ export function ArtistInfo({ artistInfo, albumList, trackList, searchQuery, sort
                 </Tooltip>)}
             </div>
           </div>
-          {isDownloading && (<DownloadProgress progress={downloadProgress} remainingCount={downloadRemainingCount} currentTrack={currentDownloadInfo} onStop={onStopDownload}/>)}
           <SearchAndSort searchQuery={searchQuery} sortBy={sortBy} onSearchChange={onSearchChange} onSortChange={onSortChange}/>
-          <TrackList tracks={trackList} searchQuery={searchQuery} sortBy={sortBy} selectedTracks={selectedTracks} downloadedTracks={downloadedTracks} failedTracks={failedTracks} skippedTracks={skippedTracks} downloadingTrack={downloadingTrack} isDownloading={isDownloading} currentPage={currentPage} itemsPerPage={itemsPerPage} showCheckboxes={true} hideAlbumColumn={false} folderName={artistInfo.name} isArtistDiscography={true} downloadedLyrics={downloadedLyrics} failedLyrics={failedLyrics} skippedLyrics={skippedLyrics} downloadingLyricsTrack={downloadingLyricsTrack} checkingAvailabilityTrack={checkingAvailabilityTrack} availabilityMap={availabilityMap} onToggleTrack={onToggleTrack} onToggleSelectAll={onToggleSelectAll} onSelectTrackRange={onSelectTrackRange} onDownloadTrack={onDownloadTrack} onQueueTrack={onQueueTrack} onDownloadLyrics={onDownloadLyrics} onDownloadCover={onDownloadCover} downloadedCovers={downloadedCovers} failedCovers={failedCovers} skippedCovers={skippedCovers} downloadingCoverTrack={downloadingCoverTrack} onCheckAvailability={onCheckAvailability} onPageChange={onPageChange} onAlbumClick={onAlbumClick} onArtistClick={onArtistClick} onTrackClick={onTrackClick}/>
+          <TrackList tracks={trackList} searchQuery={searchQuery} sortBy={sortBy} selectedTracks={selectedTracks} downloadedTracks={downloadedTracks} failedTracks={failedTracks} skippedTracks={skippedTracks} currentPage={currentPage} itemsPerPage={itemsPerPage} showCheckboxes={true} hideAlbumColumn={false} folderName={artistInfo.name} isArtistDiscography={true} downloadedLyrics={downloadedLyrics} failedLyrics={failedLyrics} skippedLyrics={skippedLyrics} downloadingLyricsTrack={downloadingLyricsTrack} checkingAvailabilityTrack={checkingAvailabilityTrack} availabilityMap={availabilityMap} onToggleTrack={onToggleTrack} onToggleSelectAll={onToggleSelectAll} onSelectTrackRange={onSelectTrackRange} onQueueTrack={onQueueTrack} onDownloadLyrics={onDownloadLyrics} onDownloadCover={onDownloadCover} downloadedCovers={downloadedCovers} failedCovers={failedCovers} skippedCovers={skippedCovers} downloadingCoverTrack={downloadingCoverTrack} onCheckAvailability={onCheckAvailability} onPageChange={onPageChange} onAlbumClick={onAlbumClick} onArtistClick={onArtistClick} onTrackClick={onTrackClick}/>
         </div>)}
     </div>);
 }

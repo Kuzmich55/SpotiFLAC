@@ -60,6 +60,18 @@ type TidalBTSManifest struct {
 	URLs           []string `json:"urls"`
 }
 
+func finalizeTidalTempFile(file *os.File, path string) (int64, error) {
+	if err := file.Close(); err != nil {
+		return 0, fmt.Errorf("failed to close Tidal temporary file: %w", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("failed to stat Tidal temporary file: %w", err)
+	}
+	return info.Size(), nil
+}
+
 func getConfiguredTidalAPIAttemptList() ([]string, error) {
 	customAPI := GetCustomTidalAPISetting()
 	if customAPI == "" {
@@ -470,14 +482,18 @@ func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string, q
 
 		pw := NewProgressWriter(out)
 		_, err = io.Copy(pw, resp.Body)
-		out.Close()
-
 		if err != nil {
+			out.Close()
 			os.Remove(tempPath)
 			return fmt.Errorf("failed to write temp file: %w", err)
 		}
+		downloadedSize, err := finalizeTidalTempFile(out, tempPath)
+		if err != nil {
+			os.Remove(tempPath)
+			return err
+		}
 
-		fmt.Printf("\rDownloaded: %.2f MB (Complete)\n", float64(pw.GetTotal())/(1024*1024))
+		fmt.Printf("\rDownloaded: %.2f MB (Complete)\n", float64(downloadedSize)/(1024*1024))
 
 	} else {
 
@@ -552,10 +568,12 @@ func (t *TidalDownloader) DownloadFromManifest(manifestB64, outputPath string, q
 			fmt.Printf("\rDownloading: %.2f MB (%d/%d segments)", mbDownloaded, i+1, totalSegments)
 		}
 
-		out.Close()
-
-		tempInfo, _ := os.Stat(tempPath)
-		fmt.Printf("\rDownloaded: %.2f MB (Complete)          \n", float64(tempInfo.Size())/(1024*1024))
+		downloadedSize, err := finalizeTidalTempFile(out, tempPath)
+		if err != nil {
+			os.Remove(tempPath)
+			return err
+		}
+		fmt.Printf("\rDownloaded: %.2f MB (Complete)          \n", float64(downloadedSize)/(1024*1024))
 	}
 
 	isAtmos := isTidalAtmosQuality(quality)

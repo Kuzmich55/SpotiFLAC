@@ -3,7 +3,7 @@ import { t, translateMessage } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Upload, X, CheckCircle2, AlertCircle, Trash2, FileMusic } from "lucide-react";
+import { Upload, X, CircleCheckBig, AlertCircle, Trash2, FileMusic } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { SelectAudioFiles, SelectFolder, ListAudioFilesInDir, ResampleAudio } from "../../wailsjs/go/main/App";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
@@ -303,7 +303,7 @@ export function AudioResamplerPage() {
             case "resampling":
                 return <Spinner className="h-4 w-4 text-primary"/>;
             case "success":
-                return <CheckCircle2 className="h-4 w-4 text-green-500"/>;
+                return <CircleCheckBig className="h-4 w-4 text-green-500"/>;
             case "error":
                 return <AlertCircle className="h-4 w-4 text-destructive"/>;
             default:
@@ -317,15 +317,15 @@ export function AudioResamplerPage() {
         <div className="flex shrink-0 items-center justify-between">
             <h1 className="text-2xl font-bold">{t("translation.common.audioResampler")}</h1>
             {files.length > 0 && (<div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleSelectFiles}>
+                <Button variant="outline" onClick={handleSelectFiles}>
                     <Upload className="h-4 w-4"/>
                     {t("translation.common.addFiles")}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleSelectFolder}>
+                <Button variant="outline" onClick={handleSelectFolder}>
                     <Upload className="h-4 w-4"/>
                     {t("translation.common.addFolder")}
                 </Button>
-                <Button variant="destructive" size="sm" onClick={clearFiles} disabled={resampling}>
+                <Button variant="destructive" onClick={clearFiles} disabled={resampling}>
                     <Trash2 className="h-4 w-4"/>
                     {t("translation.common.clearAll")}
                 </Button>
@@ -354,12 +354,12 @@ export function AudioResamplerPage() {
                 : t("translation.migrated.AudioResamplerPage.dragAndDropAudioFilesHereOr")}
                 </p>
                 <div className="flex gap-3">
-                    <Button onClick={handleSelectFiles} size="lg">
-                        <Upload className="h-5 w-5"/>
+                    <Button onClick={handleSelectFiles}>
+                        <Upload className="h-4 w-4"/>
                         {t("translation.common.selectFiles")}
                     </Button>
-                    <Button onClick={handleSelectFolder} size="lg" variant="outline">
-                        <Upload className="h-5 w-5"/>
+                    <Button onClick={handleSelectFolder} variant="outline">
+                        <Upload className="h-4 w-4"/>
                         {t("translation.common.selectFolder")}
                     </Button>
                 </div>
@@ -430,7 +430,7 @@ export function AudioResamplerPage() {
                                     <span className="text-xs uppercase text-muted-foreground shrink-0">
                                         {file.format}
                                     </span>
-                                    {file.status !== "resampling" && (<Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeFile(file.path)} disabled={resampling}>
+                                    {file.status !== "resampling" && (<Button variant="ghost" size="icon" className="shrink-0" onClick={() => removeFile(file.path)} disabled={resampling}>
                                             <X className="h-4 w-4"/>
                                         </Button>)}
                                 </div>);
@@ -438,7 +438,7 @@ export function AudioResamplerPage() {
                 </div>
 
                 <div className="flex justify-center pt-4 border-t shrink-0">
-                    <Button onClick={handleResample} disabled={resampling || resampleableCount === 0} size="lg">
+                    <Button onClick={handleResample} disabled={resampling || resampleableCount === 0}>
                         {resampling ? (<>
                                 <Spinner className="h-4 w-4"/>
                                 {t("translation.audioResampler.resampling")}

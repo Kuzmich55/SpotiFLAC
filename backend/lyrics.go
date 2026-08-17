@@ -59,6 +59,7 @@ type LyricsDownloadRequest struct {
 	TotalDiscs            int    `json:"total_discs,omitempty"`
 	LyricsTranslationMode string `json:"lyrics_translation_mode,omitempty"`
 	LyricsTranslationLang string `json:"lyrics_translation_lang,omitempty"`
+	LyricsAutoFallback    *bool  `json:"lyrics_translation_auto_fallback,omitempty"`
 	LRCLibTitleFallback   *bool  `json:"lrclib_title_fallback,omitempty"`
 }
 
@@ -255,20 +256,69 @@ func isSynced(resp *LyricsResponse) bool {
 	return resp != nil && !resp.Error && resp.SyncType == "LINE_SYNCED" && len(resp.Lines) > 0
 }
 
+func syncedLyricsStats(resp *LyricsResponse) (int, int64) {
+	lineCount := 0
+	var lastTimestampMs int64
+	if resp == nil {
+		return lineCount, lastTimestampMs
+	}
+	for _, line := range resp.Lines {
+		if strings.TrimSpace(line.Words) == "" || strings.TrimSpace(line.StartTimeMs) == "" {
+			continue
+		}
+		var timestampMs int64
+		if _, err := fmt.Sscanf(line.StartTimeMs, "%d", &timestampMs); err != nil {
+			continue
+		}
+		lineCount++
+		if timestampMs > lastTimestampMs {
+			lastTimestampMs = timestampMs
+		}
+	}
+	return lineCount, lastTimestampMs
+}
+
+func isLikelyCompleteSyncedLyrics(resp *LyricsResponse, durationSeconds int) bool {
+	if !isSynced(resp) {
+		return false
+	}
+	lineCount, lastTimestampMs := syncedLyricsStats(resp)
+	if lineCount < 4 {
+		return false
+	}
+	if durationSeconds < 60 {
+		return true
+	}
+	durationMs := int64(durationSeconds) * 1000
+	return lineCount >= 8 || lastTimestampMs*2 >= durationMs
+}
+
 func hasLyrics(resp *LyricsResponse) bool {
 	return resp != nil && !resp.Error && len(resp.Lines) > 0
 }
 
-func (c *LyricsClient) FetchLyricsAllSources(spotifyID, trackName, artistName, albumName string, duration int, titleFallback bool, translationMode, translationLang string) (*LyricsResponse, string, error) {
+func (c *LyricsClient) FetchLyricsAllSources(spotifyID, trackName, artistName, albumName string, duration int, titleFallback bool, translationMode, translationLang string, translationAutoFallback bool) (*LyricsResponse, string, error) {
 
 	var unsyncedFallback *LyricsResponse
 	var unsyncedSource string
+	var incompleteSyncedFallback *LyricsResponse
+	var incompleteSyncedSource string
 
 	check := func(resp *LyricsResponse, err error, source string) (*LyricsResponse, string, bool) {
 		if err != nil || resp == nil || resp.Error || len(resp.Lines) == 0 {
 			return nil, "", false
 		}
 		if isSynced(resp) {
+			if !isLikelyCompleteSyncedLyrics(resp, duration) {
+				lineCount, lastTimestampMs := syncedLyricsStats(resp)
+				existingLines, existingLastTimestampMs := syncedLyricsStats(incompleteSyncedFallback)
+				if incompleteSyncedFallback == nil || lineCount > existingLines || (lineCount == existingLines && lastTimestampMs > existingLastTimestampMs) {
+					incompleteSyncedFallback = resp
+					incompleteSyncedSource = source
+				}
+				fmt.Printf("   [%s] Deferring incomplete synced lyrics (%d lines, last timestamp %d ms, track duration %d s)\n", source, lineCount, lastTimestampMs, duration)
+				return nil, "", false
+			}
 			return resp, source, true
 		}
 
@@ -283,15 +333,8 @@ func (c *LyricsClient) FetchLyricsAllSources(spotifyID, trackName, artistName, a
 	var src string
 	var found bool
 	finish := func(resp *LyricsResponse, source string) (*LyricsResponse, string, error) {
-		switch strings.ToLower(strings.TrimSpace(translationMode)) {
-		case "copilot":
-			if err := ApplyAITranslations(ActiveDownloadContext(), resp, translationLang); err != nil {
-				return nil, "", fmt.Errorf("Copilot lyrics translation failed: %w", err)
-			}
-		case "gemini":
-			if err := ApplyGeminiTranslations(ActiveDownloadContext(), resp, translationLang); err != nil {
-				return nil, "", fmt.Errorf("Gemini lyrics translation failed: %w", err)
-			}
+		if err := ApplyLyricsTranslations(ActiveDownloadContext(), resp, translationMode, translationLang, translationAutoFallback); err != nil {
+			return nil, "", err
 		}
 		return resp, source, nil
 	}
@@ -361,6 +404,10 @@ func (c *LyricsClient) FetchLyricsAllSources(spotifyID, trackName, artistName, a
 	if unsyncedFallback != nil {
 		fmt.Printf("   [LRCLIB] No synced found, using unsynced from: %s\n", unsyncedSource)
 		return finish(unsyncedFallback, unsyncedSource+" (unsynced)")
+	}
+	if incompleteSyncedFallback != nil {
+		fmt.Printf("   [LRCLIB] No complete lyrics found, using incomplete synced fallback from: %s\n", incompleteSyncedSource)
+		return finish(incompleteSyncedFallback, incompleteSyncedSource+" (incomplete synced)")
 	}
 
 	return nil, "", fmt.Errorf("lyrics not found in any source")
@@ -513,7 +560,8 @@ func (c *LyricsClient) DownloadLyrics(req LyricsDownloadRequest) (*LyricsDownloa
 	}
 
 	titleFallback := req.LRCLibTitleFallback == nil || *req.LRCLibTitleFallback
-	lyrics, _, err := c.FetchLyricsAllSources(req.SpotifyID, req.TrackName, req.ArtistName, req.AlbumName, audioDuration, titleFallback, req.LyricsTranslationMode, req.LyricsTranslationLang)
+	translationAutoFallback := req.LyricsAutoFallback == nil || *req.LyricsAutoFallback
+	lyrics, _, err := c.FetchLyricsAllSources(req.SpotifyID, req.TrackName, req.ArtistName, req.AlbumName, audioDuration, titleFallback, req.LyricsTranslationMode, req.LyricsTranslationLang, translationAutoFallback)
 	if err != nil {
 		return &LyricsDownloadResponse{
 			Success: false,

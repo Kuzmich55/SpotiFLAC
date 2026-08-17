@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 
 	"net/http"
-	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -328,6 +327,12 @@ func (a *App) startup(ctx context.Context) {
 	if err := backend.InitHistoryDB("SpotiFLAC"); err != nil {
 		fmt.Printf("Failed to init history DB: %v\n", err)
 	}
+	if err := backend.InitPersistentQueueDB(); err != nil {
+		fmt.Printf("Failed to init queue DB: %v\n", err)
+	}
+	if err := backend.InitLibraryIndexDB(); err != nil {
+		fmt.Printf("Failed to init library index DB: %v\n", err)
+	}
 	if err := backend.InitISRCCacheDB(); err != nil {
 		fmt.Printf("Failed to init ISRC cache DB: %v\n", err)
 	}
@@ -340,6 +345,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	backend.CloseLibraryIndexDB()
+	backend.ClosePersistentQueueDB()
 	backend.CloseHistoryDB()
 	backend.CloseISRCCacheDB()
 }
@@ -364,6 +371,7 @@ type DownloadRequest struct {
 	TidalAPIURL                string `json:"tidal_api_url,omitempty"`
 	QobuzAPIURL                string `json:"qobuz_api_url,omitempty"`
 	OutputDir                  string `json:"output_dir,omitempty"`
+	LibraryRoot                string `json:"library_root,omitempty"`
 	AudioFormat                string `json:"audio_format,omitempty"`
 	FilenameFormat             string `json:"filename_format,omitempty"`
 	TrackNumber                bool   `json:"track_number,omitempty"`
@@ -373,6 +381,7 @@ type DownloadRequest struct {
 	EmbedLyrics                bool   `json:"embed_lyrics,omitempty"`
 	LyricsTranslationMode      string `json:"lyrics_translation_mode,omitempty"`
 	LyricsTranslationLang      string `json:"lyrics_translation_lang,omitempty"`
+	LyricsAutoFallback         *bool  `json:"lyrics_translation_auto_fallback,omitempty"`
 	LRCLibTitleFallback        *bool  `json:"lrclib_title_fallback,omitempty"`
 	EmbedMaxQualityCover       bool   `json:"embed_max_quality_cover,omitempty"`
 	ServiceURL                 string `json:"service_url,omitempty"`
@@ -665,7 +674,8 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 	if req.FilenameFormat == "" {
 		req.FilenameFormat = "title-artist"
 	}
-	shouldResolveISRC := strings.Contains(req.FilenameFormat, "{isrc}") || backend.GetExistingFileCheckModeSetting() == "isrc"
+	existingFileCheckMode := backend.GetExistingFileCheckModeSetting()
+	shouldResolveISRC := strings.Contains(req.FilenameFormat, "{isrc}") || existingFileCheckMode == "isrc" || existingFileCheckMode == "hybrid"
 	if req.ISRC == "" && shouldResolveISRC && req.SpotifyID != "" {
 		req.ISRC = backend.ResolveTrackISRC(req.SpotifyID)
 	}
@@ -806,7 +816,8 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			go func() {
 				client := backend.NewLyricsClient()
 				titleFallback := req.LRCLibTitleFallback == nil || *req.LRCLibTitleFallback
-				resp, _, err := client.FetchLyricsAllSources(req.SpotifyID, req.TrackName, req.ArtistName, req.AlbumName, req.Duration, titleFallback, req.LyricsTranslationMode, req.LyricsTranslationLang)
+				translationAutoFallback := req.LyricsAutoFallback == nil || *req.LyricsAutoFallback
+				resp, _, err := client.FetchLyricsAllSources(req.SpotifyID, req.TrackName, req.ArtistName, req.AlbumName, req.Duration, titleFallback, req.LyricsTranslationMode, req.LyricsTranslationLang, translationAutoFallback)
 				if err == nil && resp != nil && len(resp.Lines) > 0 {
 					lrc := client.ConvertToLRC(resp, req.TrackName, req.ArtistName)
 					lyricsChan <- lrc
@@ -1003,8 +1014,10 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 		}
 		filename = convertedFile
 	}
+	var persistedSettings map[string]interface{}
 	if !alreadyExists {
 		settings, settingsErr := a.LoadSettings()
+		persistedSettings = settings
 		if settingsErr != nil {
 			fmt.Printf("Warning: failed to load metadata tag settings: %v\n", settingsErr)
 		} else {
@@ -1015,6 +1028,21 @@ func (a *App) DownloadTrack(req DownloadRequest) (DownloadResponse, error) {
 				fmt.Printf("Warning: failed to apply metadata tag settings: %v\n", filterErr)
 			}
 		}
+	}
+	libraryRoot := strings.TrimSpace(req.LibraryRoot)
+	if libraryRoot == "" {
+		if persistedSettings == nil {
+			persistedSettings, _ = a.LoadSettings()
+		}
+		if persistedSettings != nil {
+			libraryRoot, _ = persistedSettings["downloadPath"].(string)
+		}
+	}
+	if libraryRoot == "" {
+		libraryRoot = req.OutputDir
+	}
+	if indexErr := backend.RegisterLibraryFile(libraryRoot, filename, req.SpotifyID, req.ISRC); indexErr != nil {
+		fmt.Printf("Warning: failed to update library index: %v\n", indexErr)
 	}
 
 	message := "Download completed successfully"
@@ -1208,6 +1236,18 @@ func (a *App) GetDownloadProgress() backend.ProgressInfo {
 
 func (a *App) GetDownloadQueue() backend.DownloadQueueInfo {
 	return backend.GetDownloadQueue()
+}
+
+func (a *App) LoadPersistentDownloadQueue() (string, error) {
+	return backend.LoadPersistentDownloadQueue()
+}
+
+func (a *App) ReplacePersistentDownloadQueue(queueJSON string) error {
+	return backend.ReplacePersistentDownloadQueue(queueJSON)
+}
+
+func (a *App) ApplyPersistentDownloadQueueChanges(upsertsJSON string, removedIDs []string, orderJSON string) error {
+	return backend.ApplyPersistentDownloadQueueChanges(upsertsJSON, removedIDs, orderJSON)
 }
 
 func (a *App) ClearCompletedDownloads() {
@@ -1902,6 +1942,7 @@ type LyricsDownloadRequest struct {
 	DiscNumber            int    `json:"disc_number"`
 	LyricsTranslationMode string `json:"lyrics_translation_mode,omitempty"`
 	LyricsTranslationLang string `json:"lyrics_translation_lang,omitempty"`
+	LyricsAutoFallback    *bool  `json:"lyrics_translation_auto_fallback,omitempty"`
 	LRCLibTitleFallback   *bool  `json:"lrclib_title_fallback,omitempty"`
 }
 
@@ -1930,6 +1971,7 @@ func (a *App) DownloadLyrics(req LyricsDownloadRequest) (backend.LyricsDownloadR
 		DiscNumber:            req.DiscNumber,
 		LyricsTranslationMode: req.LyricsTranslationMode,
 		LyricsTranslationLang: req.LyricsTranslationLang,
+		LyricsAutoFallback:    req.LyricsAutoFallback,
 		LRCLibTitleFallback:   req.LRCLibTitleFallback,
 	}
 
@@ -2417,7 +2459,16 @@ func (a *App) PreviewRenameFiles(files []string, format string) []backend.Rename
 }
 
 func (a *App) RenameFilesByMetadata(files []string, format string) []backend.RenameResult {
-	return backend.RenameFiles(files, format)
+	results := backend.RenameFiles(files, format)
+	for _, result := range results {
+		if !result.Success {
+			continue
+		}
+		if err := backend.MoveLibraryIndexFile(result.OldPath, result.NewPath); err != nil {
+			fmt.Printf("Warning: failed to update library index after rename: %v\n", err)
+		}
+	}
+	return results
 }
 
 func (a *App) ReadTextFile(filePath string) (string, error) {
@@ -2457,7 +2508,13 @@ func (a *App) RenameFileTo(oldPath, newName string) error {
 	dir := filepath.Dir(oldPath)
 	ext := filepath.Ext(oldPath)
 	newPath := filepath.Join(dir, newName+ext)
-	return os.Rename(oldPath, newPath)
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return err
+	}
+	if err := backend.MoveLibraryIndexFile(oldPath, newPath); err != nil {
+		fmt.Printf("Warning: failed to update library index after rename: %v\n", err)
+	}
+	return nil
 }
 
 func (a *App) SelectImageVideo() ([]string, error) {
@@ -2496,6 +2553,7 @@ type CheckFileExistenceRequest struct {
 	Artists             string `json:"artists,omitempty"`
 	AlbumName           string `json:"album_name,omitempty"`
 	AlbumArtist         string `json:"album_artist,omitempty"`
+	AlbumArtists        string `json:"album_artists,omitempty"`
 	Category            string `json:"category,omitempty"`
 	UPC                 string `json:"upc,omitempty"`
 	ReleaseDate         string `json:"release_date,omitempty"`
@@ -2520,93 +2578,111 @@ type CheckFileExistenceResult struct {
 	ArtistName string `json:"artist_name,omitempty"`
 }
 
-type existingFileLookupIndex struct {
-	byISRC map[string]string
-}
-
-func isAudioFileForExistenceCheck(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".flac", ".mp3", ".m4a":
-		return true
+func existenceCheckAudioExtension(audioFormat string) string {
+	switch strings.ToLower(strings.TrimSpace(audioFormat)) {
+	case "mp3":
+		return ".mp3"
+	case "m4a", "m4a-aac", "m4a-alac", "alac", "atmos", "apple":
+		return ".m4a"
+	case "wav":
+		return ".wav"
+	case "aiff", "aif":
+		return ".aiff"
+	case "opus":
+		return ".opus"
 	default:
-		return false
+		return ".flac"
 	}
 }
 
-func normalizeExistingFileIdentifier(value string) string {
-	return strings.ToUpper(strings.TrimSpace(value))
+func appendUniqueExistenceFilename(filenames []string, seen map[string]struct{}, filename string) []string {
+	key := strings.ToLower(strings.TrimSpace(filename))
+	if key == "" {
+		return filenames
+	}
+	if _, exists := seen[key]; exists {
+		return filenames
+	}
+	seen[key] = struct{}{}
+	return append(filenames, filename)
 }
 
-func buildExistingFileLookupIndex(scanRoot string, mode string) existingFileLookupIndex {
-	index := existingFileLookupIndex{
-		byISRC: make(map[string]string),
+func buildExistenceFilenameCandidates(t CheckFileExistenceRequest, defaultFilenameFormat, isrc string) []string {
+	rawFormat := t.FilenameFormat
+	if rawFormat == "" {
+		rawFormat = defaultFilenameFormat
+	}
+	allArtists := strings.TrimSpace(t.Artists)
+	if allArtists == "" {
+		allArtists = t.ArtistName
+	}
+	allAlbumArtists := strings.TrimSpace(t.AlbumArtists)
+	if allAlbumArtists == "" {
+		allAlbumArtists = t.AlbumArtist
+	}
+	primaryArtist := backend.GetFirstArtist(allArtists)
+	if primaryArtist == "" {
+		primaryArtist = t.ArtistName
+	}
+	primaryAlbumArtist := backend.GetFirstArtist(allAlbumArtists)
+	if primaryAlbumArtist == "" {
+		primaryAlbumArtist = t.AlbumArtist
+	}
+	if primaryAlbumArtist == "" {
+		primaryAlbumArtist = primaryArtist
 	}
 
-	scanRoot = backend.NormalizePath(scanRoot)
-	if scanRoot == "" || mode == "filename" {
-		return index
-	}
-
-	var isrcPaths []string
-	_ = filepath.Walk(scanRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || !isAudioFileForExistenceCheck(path) {
-			return nil
-		}
-		if info.Size() <= 100*1024 {
-			return nil
-		}
-
-		isrcPaths = append(isrcPaths, path)
-
-		return nil
-	})
-
-	if len(isrcPaths) == 0 {
-		return index
-	}
-
-	workers := goruntime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(isrcPaths) {
-		workers = len(isrcPaths)
-	}
-
-	isrcByIndex := make([]string, len(isrcPaths))
-	jobs := make(chan int, len(isrcPaths))
-	var wg sync.WaitGroup
-
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				metadata, metadataErr := backend.ExtractFullMetadataFromFile(isrcPaths[idx])
-				if metadataErr != nil {
-					continue
-				}
-				isrcByIndex[idx] = normalizeExistingFileIdentifier(metadata.ISRC)
+	prepareFormat := func(legacyArtists bool) string {
+		filenameFormat := rawFormat
+		if strings.Contains(filenameFormat, "{") {
+			if !legacyArtists {
+				filenameFormat = backend.ApplyArtistFilenameTokens(filenameFormat, allArtists, allAlbumArtists)
 			}
-		}()
-	}
-
-	for i := range isrcPaths {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-
-	for idx, normalizedISRC := range isrcByIndex {
-		if normalizedISRC == "" {
-			continue
+			filenameFormat = backend.ApplyExtraFilenameTokens(filenameFormat, allArtists, t.TotalTracks, t.TotalDiscs)
+			filenameFormat = backend.ApplyFilenameContextTokens(filenameFormat, t.Category, "", "", t.UPC)
 		}
-		if _, exists := index.byISRC[normalizedISRC]; !exists {
-			index.byISRC[normalizedISRC] = isrcPaths[idx]
-		}
+		return filenameFormat
+	}
+	trackNumber := t.Position
+	if t.UseAlbumTrackNumber && t.TrackNumber > 0 {
+		trackNumber = t.TrackNumber
+	}
+	build := func(artist, albumArtist, filenameFormat string) string {
+		base := backend.BuildExpectedFilename(
+			t.TrackName,
+			artist,
+			t.AlbumName,
+			albumArtist,
+			t.ReleaseDate,
+			filenameFormat,
+			"",
+			"",
+			t.IncludeTrackNumber,
+			trackNumber,
+			t.DiscNumber,
+			t.UseAlbumTrackNumber,
+			isrc,
+		)
+		return strings.TrimSuffix(base, filepath.Ext(base)) + existenceCheckAudioExtension(t.AudioFormat)
 	}
 
-	return index
+	seen := make(map[string]struct{}, 2)
+	filenames := make([]string, 0, 2)
+	filenames = appendUniqueExistenceFilename(filenames, seen, build(primaryArtist, primaryAlbumArtist, prepareFormat(false)))
+	if !strings.EqualFold(allArtists, primaryArtist) || !strings.EqualFold(allAlbumArtists, primaryAlbumArtist) {
+		filenames = appendUniqueExistenceFilename(filenames, seen, build(allArtists, allAlbumArtists, prepareFormat(true)))
+	}
+	return filenames
+}
+
+func findExpectedFileInTargetDirectory(targetDir string, filenames []string) (string, bool) {
+	for _, filename := range filenames {
+		path := filepath.Join(targetDir, filename)
+		if fileInfo, err := os.Stat(path); err == nil && !fileInfo.IsDir() && fileInfo.Size() > 100*1024 {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func (a *App) CheckFilesExistence(outputDir string, rootDir string, tracks []CheckFileExistenceRequest) []CheckFileExistenceResult {
@@ -2626,6 +2702,12 @@ func (a *App) CheckFilesExistence(outputDir string, rootDir string, tracks []Che
 	if rootDir != "" {
 		scanRoot = rootDir
 	}
+	if !redownloadWithSuffix {
+		includeMetadata := existingFileCheckMode == "isrc" || existingFileCheckMode == "hybrid"
+		if err := backend.EnsureLibraryIndex(scanRoot, includeMetadata); err != nil {
+			fmt.Printf("Warning: failed to prepare library index: %v\n", err)
+		}
+	}
 
 	type result struct {
 		index  int
@@ -2633,14 +2715,6 @@ func (a *App) CheckFilesExistence(outputDir string, rootDir string, tracks []Che
 	}
 
 	resultsChan := make(chan result, len(tracks))
-	var lookupIndex existingFileLookupIndex
-	var lookupIndexOnce sync.Once
-	getLookupIndex := func() existingFileLookupIndex {
-		lookupIndexOnce.Do(func() {
-			lookupIndex = buildExistingFileLookupIndex(scanRoot, existingFileCheckMode)
-		})
-		return lookupIndex
-	}
 
 	for i, track := range tracks {
 		go func(idx int, t CheckFileExistenceRequest) {
@@ -2655,92 +2729,58 @@ func (a *App) CheckFilesExistence(outputDir string, rootDir string, tracks []Che
 				resultsChan <- result{index: idx, result: res}
 				return
 			}
+			if redownloadWithSuffix {
+				resultsChan <- result{index: idx, result: res}
+				return
+			}
 
-			filenameFormat := t.FilenameFormat
-			if filenameFormat == "" {
-				filenameFormat = defaultFilenameFormat
-			}
-			if strings.Contains(filenameFormat, "{") {
-				artistsForTokens := t.Artists
-				if strings.TrimSpace(artistsForTokens) == "" {
-					artistsForTokens = t.ArtistName
+			if existingFileCheckMode == "hybrid" && t.SpotifyID != "" {
+				path, exists, lookupErr := backend.FindExistingLibraryFile(scanRoot, backend.LibraryIndexLookupRequest{
+					Mode:      "hybrid",
+					SpotifyID: t.SpotifyID,
+				})
+				if lookupErr != nil {
+					fmt.Printf("Warning: library index Spotify ID lookup failed: %v\n", lookupErr)
+				} else if exists {
+					res.Exists = true
+					res.FilePath = path
+					resultsChan <- result{index: idx, result: res}
+					return
 				}
-				filenameFormat = backend.ApplyExtraFilenameTokens(filenameFormat, artistsForTokens, t.TotalTracks, t.TotalDiscs)
-				filenameFormat = backend.ApplyFilenameContextTokens(filenameFormat, t.Category, "", "", t.UPC)
 			}
+
 			isrc := strings.TrimSpace(t.ISRC)
-			shouldResolveISRC := existingFileCheckMode == "isrc" || strings.Contains(filenameFormat, "{isrc}")
+			shouldResolveISRC := existingFileCheckMode == "isrc" || existingFileCheckMode == "hybrid" || strings.Contains(t.FilenameFormat, "{isrc}")
 			if isrc == "" && shouldResolveISRC && t.SpotifyID != "" {
 				isrc = backend.ResolveTrackISRC(t.SpotifyID)
 			}
-
-			trackNumber := t.Position
-			if t.UseAlbumTrackNumber && t.TrackNumber > 0 {
-				trackNumber = t.TrackNumber
-			}
-
-			fileExt := ".flac"
-			switch strings.ToLower(strings.TrimSpace(t.AudioFormat)) {
-			case "mp3":
-				fileExt = ".mp3"
-			case "m4a", "m4a-aac", "m4a-alac", "alac", "atmos", "apple":
-				fileExt = ".m4a"
-			}
-
-			expectedFilenameBase := backend.BuildExpectedFilename(
-				t.TrackName,
-				t.ArtistName,
-				t.AlbumName,
-				t.AlbumArtist,
-				t.ReleaseDate,
-				filenameFormat,
-				"",
-				"",
-				t.IncludeTrackNumber,
-				trackNumber,
-				t.DiscNumber,
-				t.UseAlbumTrackNumber,
-				isrc,
-			)
-
-			expectedFilename := strings.TrimSuffix(expectedFilenameBase, ".flac") + fileExt
+			filenames := buildExistenceFilenameCandidates(t, defaultFilenameFormat, isrc)
 
 			targetDir := outputDir
 			if t.RelativePath != "" {
 				targetDir = filepath.Join(outputDir, t.RelativePath)
 			}
 
-			expectedPath := filepath.Join(targetDir, expectedFilename)
-			if redownloadWithSuffix {
-				expectedPath, _ = backend.ResolveOutputPathForDownload(expectedPath, true)
-				resultsChan <- result{index: idx, result: res}
-				return
+			path, exists, lookupErr := backend.FindExistingLibraryFile(scanRoot, backend.LibraryIndexLookupRequest{
+				Mode:      existingFileCheckMode,
+				SpotifyID: t.SpotifyID,
+				ISRC:      isrc,
+				Filenames: filenames,
+			})
+			if lookupErr != nil {
+				fmt.Printf("Warning: library index lookup failed: %v\n", lookupErr)
+			} else if exists {
+				res.Exists = true
+				res.FilePath = path
 			}
-
-			normalizedISRC := normalizeExistingFileIdentifier(isrc)
-			effectiveMode := existingFileCheckMode
-			if effectiveMode == "isrc" && normalizedISRC == "" {
-				effectiveMode = "filename"
-			}
-
-			switch effectiveMode {
-			case "isrc":
-				if path, ok := getLookupIndex().byISRC[normalizedISRC]; ok {
+			filenameFallbackAllowed := existingFileCheckMode == "filename" || existingFileCheckMode == "hybrid" || (existingFileCheckMode == "isrc" && isrc == "")
+			if !res.Exists && filenameFallbackAllowed {
+				if path, exists := findExpectedFileInTargetDirectory(targetDir, filenames); exists {
 					res.Exists = true
 					res.FilePath = path
-				}
-			case "hybrid":
-				if path, ok := getLookupIndex().byISRC[normalizeExistingFileIdentifier(t.ISRC)]; ok {
-					res.Exists = true
-					res.FilePath = path
-				} else if fileInfo, err := os.Stat(expectedPath); err == nil && fileInfo.Size() > 100*1024 {
-					res.Exists = true
-					res.FilePath = expectedPath
-				}
-			default:
-				if fileInfo, err := os.Stat(expectedPath); err == nil && fileInfo.Size() > 100*1024 {
-					res.Exists = true
-					res.FilePath = expectedPath
+					if indexErr := backend.RegisterLibraryFile(scanRoot, path, t.SpotifyID, isrc); indexErr != nil {
+						fmt.Printf("Warning: failed to repair library index: %v\n", indexErr)
+					}
 				}
 			}
 

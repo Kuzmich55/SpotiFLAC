@@ -128,6 +128,7 @@ export interface DownloadRequest {
     tidal_api_url?: string;
     qobuz_api_url?: string;
     output_dir?: string;
+    library_root?: string;
     audio_format?: string;
     allow_fallback?: boolean;
     allow_atmos_fallback?: boolean;
@@ -139,8 +140,9 @@ export interface DownloadRequest {
     use_album_track_number?: boolean;
     spotify_id?: string;
     embed_lyrics?: boolean;
-    lyrics_translation_mode?: "off" | "copilot" | "gemini";
+    lyrics_translation_mode?: "off" | "chatgpt" | "gemini";
     lyrics_translation_lang?: string;
+    lyrics_translation_auto_fallback?: boolean;
     lrclib_title_fallback?: boolean;
     embed_max_quality_cover?: boolean;
     service_url?: string;
@@ -157,6 +159,7 @@ export interface DownloadRequest {
     use_first_artist_only?: boolean;
     use_single_genre?: boolean;
     embed_genre?: boolean;
+    separator?: string;
     save_cover?: boolean;
     artists?: string;
     category?: string;
@@ -239,8 +242,9 @@ export interface LyricsDownloadRequest {
     disc_number?: number;
     total_tracks?: number;
     total_discs?: number;
-    lyrics_translation_mode?: "off" | "copilot" | "gemini";
+    lyrics_translation_mode?: "off" | "chatgpt" | "gemini";
     lyrics_translation_lang?: string;
+    lyrics_translation_auto_fallback?: boolean;
     lrclib_title_fallback?: boolean;
 }
 export interface LyricsDownloadResponse {

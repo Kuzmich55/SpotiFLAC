@@ -8,6 +8,8 @@ import LynkDarkLogo from "@/assets/lynk_d.png";
 import LynkLightLogo from "@/assets/lynk_l.png";
 import PatreonLogo from "@/assets/patreon.svg";
 import PatreonSymbol from "@/assets/patreon_symbol.svg";
+import GumroadLogo from "@/assets/gumroad.svg";
+import GumroadSymbol from "@/assets/gumroad_symbol.png";
 import UsdtTronQr from "@/assets/usdt.jpg";
 import UsdtEvmQr from "@/assets/usdt_evm.jpg";
 import UsdcEvmQr from "@/assets/usdc.jpg";
@@ -77,7 +79,25 @@ export function SupportPage() {
       </div>
 
       <div className="flex flex-col items-center justify-center">
-        <div className="grid w-full max-w-5xl overflow-hidden rounded-xl border bg-card shadow-sm md:grid-cols-2">
+        <div className="grid w-full max-w-5xl overflow-hidden rounded-xl border bg-card shadow-sm md:grid-cols-3">
+          <div className="flex min-h-84 flex-col items-center justify-between space-y-4 border-b p-4 md:border-b-0 md:border-r">
+            <div className="flex w-full flex-col items-center space-y-2">
+              <div className="flex h-32 w-full items-center justify-center px-4">
+                <img src={GumroadLogo} className="w-56 max-w-full brightness-0 dark:invert" alt="Gumroad"/>
+              </div>
+              <h4 className="text-lg font-semibold text-foreground">{t("translation.migrated.SupportPage.supportViaGumroad")}</h4>
+              <p className="px-2 text-center text-sm leading-relaxed text-muted-foreground">
+                {t("translation.migrated.SupportPage.buyMeACoffeeToHelpKeep")}
+              </p>
+            </div>
+            <div className="flex min-h-24 w-full items-start justify-center pt-1">
+              <Button className="h-9 w-fit max-w-full gap-1.5 bg-[#ff90e8] px-4 text-sm font-semibold text-black hover:bg-[#f47edb]" onClick={() => openExternal("https://afkarxyz.gumroad.com/coffee")}>
+                <img src={GumroadSymbol} className="h-5 w-5 shrink-0" alt="" aria-hidden="true"/>
+                {t("translation.migrated.SupportPage.supportMeOnGumroad")}
+              </Button>
+            </div>
+          </div>
+
           <div className="flex min-h-84 flex-col items-center justify-between space-y-4 border-b p-4 md:border-b-0 md:border-r">
             <div className="flex w-full flex-col items-center space-y-2">
               <div className="flex h-32 w-full items-center justify-center px-4">
@@ -89,8 +109,8 @@ export function SupportPage() {
               </p>
             </div>
             <div className="flex min-h-24 w-full items-start justify-center pt-1">
-              <Button className="h-9 w-fit max-w-full gap-1.5 px-4 bg-[#ff424d] text-sm font-semibold text-white hover:bg-[#e63945]" onClick={() => openExternal("https://www.patreon.com/cw/spotbye")}>
-                <img src={PatreonSymbol} className="h-5 w-5 shrink-0" alt="" aria-hidden="true"/>
+              <Button className="h-9 w-fit max-w-full gap-1.5 bg-black px-4 text-sm font-semibold text-white hover:bg-neutral-800 dark:bg-white dark:text-black dark:hover:bg-neutral-200" onClick={() => openExternal("https://www.patreon.com/cw/spotbye")}>
+                <img src={PatreonSymbol} className="h-5 w-5 shrink-0 dark:invert" alt="" aria-hidden="true"/>
                 {t("translation.migrated.SupportPage.supportMeOnPatreon")}
               </Button>
             </div>

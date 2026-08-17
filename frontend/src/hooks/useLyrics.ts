@@ -18,6 +18,7 @@ async function resolveTemplateISRC(settings: {
     const folderTemplate = settings.folderTemplate || "";
     const filenameTemplate = settings.filenameTemplate || "";
     const shouldResolveISRC = settings.existingFileCheckMode === "isrc" ||
+        settings.existingFileCheckMode === "hybrid" ||
         folderTemplate.includes("{isrc}") ||
         filenameTemplate.includes("{isrc}");
     if (!shouldResolveISRC) {

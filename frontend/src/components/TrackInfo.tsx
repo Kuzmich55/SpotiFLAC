@@ -1,7 +1,7 @@
 import { t } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Download, FolderOpen, CheckCircle, XCircle, FileText, FileCheck, Globe, ImageDown, Play, Pause, ListPlus, Check } from "lucide-react";
+import { Download, FolderOpen, CircleCheckBig, XCircle, FileText, FileCheck, Globe, ImageDown, Play, Pause, ListPlus, CircleCheck } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger, } from "@/components/ui/tooltip";
 import type { TrackMetadata, TrackAvailability } from "@/types/api";
@@ -50,7 +50,8 @@ interface TrackInfoProps {
 }
 export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded, isFailed, isSkipped, downloadingLyricsTrack, downloadedLyrics, failedLyrics, skippedLyrics, checkingAvailability, availability, downloadingCover, downloadedCover, failedCover, skippedCover, onDownload, onQueueTrack, onDownloadLyrics, onCheckAvailability, onDownloadCover, onOpenFolder, onAlbumClick, onArtistClick, onPublisherClick, onBack, }: TrackInfoProps) {
     const { playPreview, loadingPreview, playingTrack } = usePreview();
-    const { flashQueued, isQueued } = useQueueFeedback();
+    const { isQueued } = useQueueFeedback();
+    const trackQueued = isQueued(track.spotify_id);
     const hasAlbumClick = !!(onAlbumClick && track.album_id && track.album_url);
     const clickableArtists = buildClickableArtists(track.artists, track.artists_data, track.artist_id, track.artist_url);
     const formatDuration = (ms: number) => {
@@ -66,7 +67,7 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
     };
     return (<Card className="relative">
     {onBack && (<div className="absolute top-4 right-4 z-10">
-        <Button variant="ghost" size="icon" onClick={onBack}>
+        <Button variant="ghost" size="icon" onClick={onBack} className="text-muted-foreground hover:bg-transparent hover:text-foreground">
             <XCircle className="h-5 w-5"/>
         </Button>
     </div>)}
@@ -85,7 +86,7 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
             <div className="flex items-center gap-3">
               <h1 className="text-3xl font-bold wrap-break-word">{track.name}</h1>
               {track.is_explicit && (<span className="inline-flex items-center justify-center bg-red-600 text-white text-[10px] h-4 w-4 rounded shrink-0" title={t("translation.common.explicit")}>E</span>)}
-              {isSkipped ? (<FileCheck className="h-6 w-6 text-yellow-500 shrink-0"/>) : isDownloaded ? (<CheckCircle className="h-6 w-6 text-green-500 shrink-0"/>) : isFailed ? (<XCircle className="h-6 w-6 text-red-500 shrink-0"/>) : null}
+              {isSkipped ? (<FileCheck className="h-6 w-6 text-yellow-500 shrink-0"/>) : isDownloaded ? (<CircleCheckBig className="h-6 w-6 text-green-500 shrink-0"/>) : isFailed ? (<XCircle className="h-6 w-6 text-red-500 shrink-0"/>) : null}
             </div>
             <p className="text-lg text-muted-foreground">
               {clickableArtists.length > 0 ? clickableArtists.map((artist, index) => (<span key={getClickableArtistKey(artist)}>
@@ -130,9 +131,16 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
               </div>)}
               {track.publisher && (<div>
                 <p className="text-xs text-muted-foreground">{t("translation.trackInfo.recordLabel")}</p>
-                <button type="button" className="max-w-full cursor-pointer truncate rounded-sm bg-transparent p-0 text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" title={t("translation.migrated.TrackInfo.searchSpotifyForLabel", { value1: track.publisher })} onClick={() => onPublisherClick?.(track.publisher!)}>
-                  {track.publisher}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" className="max-w-full cursor-pointer truncate rounded-sm bg-transparent p-0 text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => onPublisherClick?.(track.publisher!)}>
+                      {track.publisher}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{t("translation.migrated.TrackInfo.searchSpotifyForLabel", { value1: track.publisher })}</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>)}
             </div>
           </div>
@@ -143,9 +151,9 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
                 {t("translation.trackInfo.download")}
               </>)}
             </Button>
-            {onQueueTrack && (<Button onClick={() => { onQueueTrack(track); flashQueued(); }} variant="outline">
-              {isQueued() ? (<Check className="h-4 w-4 text-green-500"/>) : (<ListPlus className="h-4 w-4"/>)}
-              {t("translation.queue.addToQueue")}
+            {onQueueTrack && (<Button onClick={() => onQueueTrack(track)} variant="outline">
+              {trackQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}
+              {t(trackQueued ? "translation.queue.alreadyInQueue" : "translation.queue.addToQueue")}
             </Button>)}
             {track.spotify_id && (<Tooltip>
               <TooltipTrigger asChild>
@@ -160,7 +168,7 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
             {track.spotify_id && onDownloadLyrics && (<Tooltip>
               <TooltipTrigger asChild>
                 <Button onClick={() => onDownloadLyrics(track.spotify_id!, track.name, track.artists, track.album_name, track.album_artist, track.release_date, track.disc_number)} variant="outline" size="icon" disabled={downloadingLyricsTrack === track.spotify_id}>
-                  {downloadingLyricsTrack === track.spotify_id ? (<Spinner />) : skippedLyrics ? (<FileCheck className="h-4 w-4 text-yellow-500"/>) : downloadedLyrics ? (<CheckCircle className="h-4 w-4 text-green-500"/>) : failedLyrics ? (<XCircle className="h-4 w-4 text-red-500"/>) : (<FileText className="h-4 w-4"/>)}
+                  {downloadingLyricsTrack === track.spotify_id ? (<Spinner />) : skippedLyrics ? (<FileCheck className="h-4 w-4 text-yellow-500"/>) : downloadedLyrics ? (<CircleCheck className="h-4 w-4 text-green-500"/>) : failedLyrics ? (<XCircle className="h-4 w-4 text-red-500"/>) : (<FileText className="h-4 w-4"/>)}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
@@ -170,7 +178,7 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
             {track.images && onDownloadCover && (<Tooltip>
               <TooltipTrigger asChild>
                 <Button onClick={() => onDownloadCover(track.images, track.name, track.artists, track.album_name, undefined, undefined, track.spotify_id, track.album_artist, track.release_date, track.disc_number)} variant="outline" size="icon" disabled={downloadingCover}>
-                  {downloadingCover ? (<Spinner />) : skippedCover ? (<FileCheck className="h-4 w-4 text-yellow-500"/>) : downloadedCover ? (<CheckCircle className="h-4 w-4 text-green-500"/>) : failedCover ? (<XCircle className="h-4 w-4 text-red-500"/>) : (<ImageDown className="h-4 w-4"/>)}
+                  {downloadingCover ? (<Spinner />) : skippedCover ? (<FileCheck className="h-4 w-4 text-yellow-500"/>) : downloadedCover ? (<CircleCheck className="h-4 w-4 text-green-500"/>) : failedCover ? (<XCircle className="h-4 w-4 text-red-500"/>) : (<ImageDown className="h-4 w-4"/>)}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
@@ -180,7 +188,7 @@ export function TrackInfo({ track, isDownloading, downloadingTrack, isDownloaded
             {track.spotify_id && onCheckAvailability && (<Tooltip>
               <TooltipTrigger asChild>
                 <Button onClick={() => onCheckAvailability(track.spotify_id!)} variant="outline" size="icon" disabled={checkingAvailability}>
-                  {checkingAvailability ? (<Spinner />) : availability ? (hasAvailabilityLinks(availability) ? (<CheckCircle className="h-4 w-4 text-green-500"/>) : (<XCircle className="h-4 w-4 text-red-500"/>)) : (<Globe className="h-4 w-4"/>)}
+                  {checkingAvailability ? (<Spinner />) : availability ? (hasAvailabilityLinks(availability) ? (<CircleCheck className="h-4 w-4 text-green-500"/>) : (<XCircle className="h-4 w-4 text-red-500"/>)) : (<Globe className="h-4 w-4"/>)}
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="pointer-events-auto">

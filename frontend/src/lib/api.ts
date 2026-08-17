@@ -2,12 +2,17 @@ import type { SpotifyMetadataResponse, DownloadRequest, DownloadResponse, Health
 import { GetSpotifyMetadata, GetCurrentIPInfo, DownloadTrack, DownloadLyrics, DownloadCover, DownloadHeader, DownloadGalleryImage, DownloadAvatar } from "../../wailsjs/go/main/App";
 import { main } from "../../wailsjs/go/models";
 import { getSettings } from "@/lib/settings";
-export async function fetchSpotifyMetadata(url: string, batch: boolean = true, delay: number = 1.0, timeout: number = 300.0): Promise<SpotifyMetadataResponse> {
+function resolveArtistSeparator(separator: unknown): ", " | "; " {
+    return separator === "semicolon" ? "; " : ", ";
+}
+export async function fetchSpotifyMetadata(url: string, batch: boolean = true, delay: number = 1.0, timeout: number = 300.0, separator?: "comma" | "semicolon"): Promise<SpotifyMetadataResponse> {
+    const activeSeparator = resolveArtistSeparator(separator ?? getSettings().separator);
     const req = new main.SpotifyMetadataRequest({
         url,
         batch,
         delay,
         timeout,
+        separator: activeSeparator,
     });
     const jsonString = await GetSpotifyMetadata(req);
     return JSON.parse(jsonString);
@@ -16,6 +21,7 @@ export async function downloadTrack(request: DownloadRequest): Promise<DownloadR
     const settings = getSettings();
     const enriched = {
         ...request,
+        library_root: settings.downloadPath,
         auto_convert_audio: settings.autoConvertAudio,
         auto_convert_format: settings.autoConvertFormat,
         auto_convert_bitrate: settings.autoConvertBitrate,
@@ -29,12 +35,14 @@ export async function downloadTrack(request: DownloadRequest): Promise<DownloadR
         atmos_fallback_quality: settings.atmosFallbackQuality,
         lyrics_translation_mode: settings.lyricsTranslationMode,
         lyrics_translation_lang: settings.lyricsTranslationLang,
+        lyrics_translation_auto_fallback: settings.lyricsTranslationAutoFallback,
         lrclib_title_fallback: settings.lrclibTitleFallback,
+        separator: resolveArtistSeparator(settings.separator),
     };
     const req = new main.DownloadRequest(enriched);
     Object.assign(req, enriched);
     if (request.use_single_genre !== undefined) {
-        (req as any).use_single_genre = request.use_single_genre;
+        req.use_single_genre = request.use_single_genre;
     }
     return await DownloadTrack(req);
 }
@@ -54,6 +62,7 @@ export async function downloadLyrics(request: LyricsDownloadRequest): Promise<Ly
         ...request,
         lyrics_translation_mode: request.lyrics_translation_mode ?? settings.lyricsTranslationMode,
         lyrics_translation_lang: request.lyrics_translation_lang ?? settings.lyricsTranslationLang,
+        lyrics_translation_auto_fallback: request.lyrics_translation_auto_fallback ?? settings.lyricsTranslationAutoFallback,
         lrclib_title_fallback: request.lrclib_title_fallback ?? settings.lrclibTitleFallback,
     };
     const req = new main.LyricsDownloadRequest(enriched);

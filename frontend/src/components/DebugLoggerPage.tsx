@@ -1,6 +1,6 @@
 import { t, translateMessage } from "@/i18n";
 import { useState, useEffect, useRef } from "react";
-import { Trash2, Copy, Check, FileDown } from "lucide-react";
+import { Trash2, Copy, CircleCheck, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { logger, type LogEntry } from "@/lib/logger";
 import { ExportFailedDownloads } from "../../wailsjs/go/main/App";
@@ -78,7 +78,7 @@ export function DebugLoggerPage() {
             {t("translation.audioAnalysis.exportFailed")}
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={handleCopy} disabled={logs.length === 0}>
-            {copied ? <Check className="h-4 w-4"/> : <Copy className="h-4 w-4"/>}
+            {copied ? <CircleCheck className="h-4 w-4"/> : <Copy className="h-4 w-4"/>}
             {t("translation.common.copy")}
           </Button>
           <Button variant="destructive" size="sm" className="gap-1.5" onClick={handleClear} disabled={logs.length === 0}>

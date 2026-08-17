@@ -1,6 +1,6 @@
 import { t, translateMessage } from "@/i18n";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Activity, AlertCircle, ChevronDown, CheckCircle2, FileMusic, FolderOpen, Info, KeyRound, StopCircle, Trash2, Upload, X, } from "lucide-react";
+import { Activity, AlertCircle, ChevronDown, CircleCheckBig, CircleHelp, FileMusic, FolderOpen, KeyRound, StopCircle, Trash2, Upload, X, } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -94,7 +94,7 @@ function statusIcon(status: AnalysisStatus) {
         return <Spinner className="h-4 w-4 text-primary"/>;
     }
     if (status === "success") {
-        return <CheckCircle2 className="h-4 w-4 text-emerald-500"/>;
+        return <CircleCheckBig className="h-4 w-4 text-emerald-500"/>;
     }
     if (status === "error") {
         return <AlertCircle className="h-4 w-4 text-destructive"/>;
@@ -390,7 +390,7 @@ export function TempoKeyAnalyzerPage() {
                                         <Tooltip delayDuration={150}>
                                             <TooltipTrigger asChild>
                                                 <span className="inline-flex cursor-help" tabIndex={0} aria-label={t("translation.tempoKey.keyConfidenceHelp")}>
-                                                    <Info className="h-3.5 w-3.5"/>
+                                                    <CircleHelp className="h-3.5 w-3.5"/>
                                                 </span>
                                             </TooltipTrigger>
                                             <TooltipContent side="left" sideOffset={8} collisionPadding={16} className="max-w-[calc(100vw-2rem)] text-left text-pretty sm:max-w-[32rem]">
@@ -410,7 +410,7 @@ export function TempoKeyAnalyzerPage() {
                                         <Tooltip delayDuration={150}>
                                             <TooltipTrigger asChild>
                                                 <span className="inline-flex cursor-help" tabIndex={0} aria-label={t("translation.tempoKey.beatConfidenceHelp")}>
-                                                    <Info className="h-3.5 w-3.5"/>
+                                                    <CircleHelp className="h-3.5 w-3.5"/>
                                                 </span>
                                             </TooltipTrigger>
                                             <TooltipContent side="left" sideOffset={8} collisionPadding={16} className="max-w-[calc(100vw-2rem)] text-left text-pretty sm:max-w-[32rem]">
@@ -447,7 +447,7 @@ export function TempoKeyAnalyzerPage() {
         </div>) : activeItem?.status === "error" ? (<div className="flex min-h-full items-center justify-center">
             <div className="w-full max-w-md space-y-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
                 <p>{activeItem.error}</p>
-                {!isRunning && <Button size="sm" onClick={analyzePending}>{t("translation.queue.retry")}</Button>}
+                {!isRunning && <Button onClick={analyzePending}>{t("translation.queue.retry")}</Button>}
             </div>
         </div>) : (<div className="flex min-h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
             <GaugeIcon className="text-primary" size={36}/>
@@ -457,17 +457,17 @@ export function TempoKeyAnalyzerPage() {
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
             <h1 className="text-2xl font-bold">{t("translation.tempoKey.title")}</h1>
             {items.length > 0 && (<div className="flex flex-wrap gap-2">
-                {isRunning && (<Button variant="destructive" size="sm" onClick={stopAnalysis}>
+                {isBatchMode && isRunning && (<Button variant="destructive" onClick={stopAnalysis}>
                     <StopCircle className="h-4 w-4"/>
                     {t("translation.common.stop")}
                 </Button>)}
-                {!isRunning && hasPending && (<Button size="sm" onClick={analyzePending}>
+                {!isRunning && hasPending && (<Button onClick={analyzePending}>
                     <Activity className="h-4 w-4"/>
                     {t("translation.audioAnalysis.analyze")}
                 </Button>)}
                 {isBatchMode && (<DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" disabled={isRunning}>
+                        <Button variant="outline" disabled={isRunning}>
                             <Upload className="mr-1 h-4 w-4"/>
                             {t("translation.common.add")}
                             <ChevronDown className="ml-1 h-4 w-4"/>
@@ -484,10 +484,10 @@ export function TempoKeyAnalyzerPage() {
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>)}
-                <Button variant="destructive" size="sm" onClick={clearAll} disabled={isRunning}>
-                    <Trash2 className="h-4 w-4"/>
-                    {t("translation.common.clear")}
-                </Button>
+                {(isBatchMode || (isSingleMode && activeItem?.status === "success" && result)) && (<Button variant="destructive" onClick={clearAll} disabled={isRunning}>
+                        <Trash2 className="h-4 w-4"/>
+                        {t("translation.common.clear")}
+                    </Button>)}
             </div>)}
         </div>
 
@@ -499,12 +499,12 @@ export function TempoKeyAnalyzerPage() {
                 {isDragging ? t("translation.audioAnalysis.dropAudioFilesHere") : t("translation.audioAnalysis.dragDropAudioFilesHere")}
             </p>
             <div className="flex gap-3">
-                <Button onClick={handleSelectFiles} size="lg">
-                    <Upload className="h-5 w-5"/>
+                <Button onClick={handleSelectFiles}>
+                    <Upload className="h-4 w-4"/>
                     {t("translation.common.selectFiles")}
                 </Button>
-                <Button onClick={handleSelectFolder} size="lg" variant="outline">
-                    <FolderOpen className="h-5 w-5"/>
+                <Button onClick={handleSelectFolder} variant="outline">
+                    <FolderOpen className="h-4 w-4"/>
                     {t("translation.common.selectFolder")}
                 </Button>
             </div>
@@ -538,7 +538,7 @@ export function TempoKeyAnalyzerPage() {
                                     <span>{item.name.split(".").pop()?.toUpperCase() || t("translation.audioAnalysis.audio")}</span>
                                 </div>
                             </div>
-                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={(event) => { event.stopPropagation(); removeItem(item.id); }} disabled={isRunning}>
+                            <Button type="button" variant="ghost" size="icon" className="shrink-0" onClick={(event) => { event.stopPropagation(); removeItem(item.id); }} disabled={isRunning}>
                                 <X className="h-4 w-4"/>
                             </Button>
                         </div>))}

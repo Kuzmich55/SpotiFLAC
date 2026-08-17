@@ -1,12 +1,11 @@
 import { t, translateMessage } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Download, FolderOpen, ImageDown, FileText, XCircle, ListPlus, Check } from "lucide-react";
+import { FolderOpen, ImageDown, FileText, XCircle, ListPlus, CircleCheck } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SearchAndSort } from "./SearchAndSort";
 import { TrackList } from "./TrackList";
-import { DownloadProgress } from "./DownloadProgress";
 import { getSettings } from "@/lib/settings";
 import { downloadCover } from "@/lib/api";
 import { useState } from "react";
@@ -39,15 +38,6 @@ interface PlaylistInfoProps {
     downloadedTracks: Set<string>;
     failedTracks: Set<string>;
     skippedTracks: Set<string>;
-    downloadingTrack: string | null;
-    isDownloading: boolean;
-    bulkDownloadType: "all" | "selected" | null;
-    downloadProgress: number;
-    downloadRemainingCount: number;
-    currentDownloadInfo: {
-        name: string;
-        artists: string;
-    } | null;
     currentPage: number;
     itemsPerPage: number;
     downloadedLyrics?: Set<string>;
@@ -68,18 +58,14 @@ interface PlaylistInfoProps {
     onToggleTrack: (id: string) => void;
     onToggleSelectAll: (tracks: TrackMetadata[]) => void;
     onSelectTrackRange?: (ids: string[], select: boolean) => void;
-    onDownloadTrack: (id: string, name: string, artists: string, albumName: string, spotifyId?: string, folderName?: string, durationMs?: number, position?: number, albumArtist?: string, releaseDate?: string, coverUrl?: string, spotifyTrackNumber?: number, spotifyDiscNumber?: number, spotifyTotalTracks?: number, spotifyTotalDiscs?: number, copyright?: string, publisher?: string) => void;
     onDownloadLyrics?: (spotifyId: string, name: string, artists: string, albumName: string, folderName?: string, isArtistDiscography?: boolean, position?: number, albumArtist?: string, releaseDate?: string, discNumber?: number) => void;
     onDownloadCover?: (coverUrl: string, trackName: string, artistName: string, albumName: string, folderName?: string, isArtistDiscography?: boolean, position?: number, trackId?: string, albumArtist?: string, releaseDate?: string, discNumber?: number) => void;
     onCheckAvailability?: (spotifyId: string) => void;
     onDownloadAllLyrics?: () => void;
     onDownloadAllCovers?: () => void;
-    onDownloadAll: () => void;
-    onDownloadSelected: () => void;
-    onQueueAll?: () => void;
+    onQueueAll: () => void;
     onQueueSelected?: () => void;
     onQueueTrack?: (track: TrackMetadata, position?: number) => void;
-    onStopDownload: () => void;
     onOpenFolder: () => void;
     onPageChange: (page: number) => void;
     onAlbumClick: (album: {
@@ -95,12 +81,14 @@ interface PlaylistInfoProps {
     onTrackClick: (track: TrackMetadata) => void;
     onBack?: () => void;
 }
-export function PlaylistInfo({ playlistInfo, trackList, searchQuery, sortBy, selectedTracks, downloadedTracks, failedTracks, skippedTracks, downloadingTrack, isDownloading, bulkDownloadType, downloadProgress, downloadRemainingCount, currentDownloadInfo, currentPage, itemsPerPage, downloadedLyrics, failedLyrics, skippedLyrics, downloadingLyricsTrack, checkingAvailabilityTrack, availabilityMap, downloadedCovers, failedCovers, skippedCovers, downloadingCoverTrack, isBulkDownloadingCovers, isBulkDownloadingLyrics, isMetadataLoading = false, onSearchChange, onSortChange, onToggleTrack, onToggleSelectAll, onSelectTrackRange, onDownloadTrack, onDownloadLyrics, onDownloadCover, onCheckAvailability, onDownloadAllLyrics, onDownloadAllCovers, onDownloadAll, onDownloadSelected, onQueueAll, onQueueSelected, onQueueTrack, onStopDownload, onOpenFolder, onPageChange, onAlbumClick, onArtistClick, onTrackClick, onBack, }: PlaylistInfoProps) {
+export function PlaylistInfo({ playlistInfo, trackList, searchQuery, sortBy, selectedTracks, downloadedTracks, failedTracks, skippedTracks, currentPage, itemsPerPage, downloadedLyrics, failedLyrics, skippedLyrics, downloadingLyricsTrack, checkingAvailabilityTrack, availabilityMap, downloadedCovers, failedCovers, skippedCovers, downloadingCoverTrack, isBulkDownloadingCovers, isBulkDownloadingLyrics, isMetadataLoading = false, onSearchChange, onSortChange, onToggleTrack, onToggleSelectAll, onSelectTrackRange, onDownloadLyrics, onDownloadCover, onCheckAvailability, onDownloadAllLyrics, onDownloadAllCovers, onQueueAll, onQueueSelected, onQueueTrack, onOpenFolder, onPageChange, onAlbumClick, onArtistClick, onTrackClick, onBack, }: PlaylistInfoProps) {
     const settings = getSettings();
     const playlistName = playlistInfo.owner.name;
     const playlistFolderName = buildPlaylistFolderName(playlistName, playlistInfo.owner.display_name, settings.playlistOwnerFolderName);
     const [downloadingPlaylistCover, setDownloadingPlaylistCover] = useState(false);
-    const { flashQueued, isQueued } = useQueueFeedback();
+    const { areQueued, isCollectionQueued } = useQueueFeedback();
+    const allTracksQueued = isCollectionQueued("playlist", playlistFolderName) || areQueued(trackList.map((track) => track.spotify_id));
+    const selectedTracksQueued = areQueued(selectedTracks);
     const fetchedTrackCount = trackList.length;
     const totalTrackCount = playlistInfo.tracks.total;
     const showStreamingProgress = isMetadataLoading && totalTrackCount > 0 && fetchedTrackCount < totalTrackCount;
@@ -164,7 +152,7 @@ export function PlaylistInfo({ playlistInfo, trackList, searchQuery, sortBy, sel
     return (<div className="space-y-6">
       <Card className="relative">
       {onBack && (<div className="absolute top-4 right-4 z-10">
-          <Button variant="ghost" size="icon" onClick={onBack}>
+          <Button variant="ghost" size="icon" onClick={onBack} className="text-muted-foreground hover:bg-transparent hover:text-foreground">
               <XCircle className="h-5 w-5"/>
           </Button>
       </div>)}
@@ -204,16 +192,11 @@ export function PlaylistInfo({ playlistInfo, trackList, searchQuery, sortBy, sel
                 </div>
               </div>
               <div className="flex gap-2 flex-wrap">
-                <Button onClick={onDownloadAll} disabled={isDownloading}>
-                  {isDownloading && bulkDownloadType === "all" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                  {t("translation.albumInfo.downloadAll")}
+                <Button onClick={onQueueAll} variant={allTracksQueued ? "outline" : "default"}>
+                  {allTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}
+                  {t(allTracksQueued ? "translation.queue.alreadyInQueue" : "translation.queue.addToQueue")}
                 </Button>
-                {onQueueAll && (<Button onClick={() => { onQueueAll(); flashQueued("all"); }} variant="outline">{isQueued("all") ? (<Check className="h-4 w-4 text-green-500"/>) : (<ListPlus className="h-4 w-4"/>)}{t("translation.queue.addPlaylistQueue")}</Button>)}
-                {selectedTracks.length > 0 && onQueueSelected && (<Button onClick={() => { onQueueSelected(); flashQueued("selected"); }} variant="outline">{isQueued("selected") ? (<Check className="h-4 w-4 text-green-500"/>) : (<ListPlus className="h-4 w-4"/>)}{t("translation.queue.addSelectedQueueValue1", { value1: selectedTracks.length.toLocaleString() })}</Button>)}
-                {selectedTracks.length > 0 && (<Button onClick={onDownloadSelected} variant="secondary" disabled={isDownloading}>
-                    {isDownloading && bulkDownloadType === "selected" ? (<Spinner />) : (<Download className="h-4 w-4"/>)}
-                    {t("translation.migrated.PlaylistInfo.downloadSelected")}{selectedTracks.length.toLocaleString()})
-                  </Button>)}
+                {selectedTracks.length > 0 && onQueueSelected && (<Button onClick={onQueueSelected} variant="outline">{selectedTracksQueued ? (<CircleCheck className="h-4 w-4 text-primary"/>) : (<ListPlus className="h-4 w-4"/>)}{selectedTracksQueued ? t("translation.queue.alreadyInQueue") : t("translation.queue.addSelectedQueueValue1", { value1: selectedTracks.length.toLocaleString() })}</Button>)}
                 {onDownloadAllLyrics && (<Tooltip>
                     <TooltipTrigger asChild>
                       <Button onClick={onDownloadAllLyrics} variant="outline" size="icon" disabled={isBulkDownloadingLyrics}>
@@ -245,14 +228,13 @@ export function PlaylistInfo({ playlistInfo, trackList, searchQuery, sortBy, sel
                     </TooltipContent>
                   </Tooltip>)}
               </div>
-              {isDownloading && (<DownloadProgress progress={downloadProgress} remainingCount={downloadRemainingCount} currentTrack={currentDownloadInfo} onStop={onStopDownload}/>)}
             </div>
           </div>
         </CardContent>
       </Card>
       <div className="space-y-4">
         <SearchAndSort searchQuery={searchQuery} sortBy={sortBy} onSearchChange={onSearchChange} onSortChange={onSortChange}/>
-        <TrackList tracks={trackList} searchQuery={searchQuery} sortBy={sortBy} selectedTracks={selectedTracks} downloadedTracks={downloadedTracks} failedTracks={failedTracks} skippedTracks={skippedTracks} downloadingTrack={downloadingTrack} isDownloading={isDownloading} currentPage={currentPage} itemsPerPage={itemsPerPage} showCheckboxes={true} hideAlbumColumn={false} folderName={playlistFolderName} downloadedLyrics={downloadedLyrics} failedLyrics={failedLyrics} skippedLyrics={skippedLyrics} downloadingLyricsTrack={downloadingLyricsTrack} checkingAvailabilityTrack={checkingAvailabilityTrack} availabilityMap={availabilityMap} downloadedCovers={downloadedCovers} failedCovers={failedCovers} skippedCovers={skippedCovers} downloadingCoverTrack={downloadingCoverTrack} onToggleTrack={onToggleTrack} onToggleSelectAll={onToggleSelectAll} onSelectTrackRange={onSelectTrackRange} onDownloadTrack={onDownloadTrack} onQueueTrack={onQueueTrack} onDownloadLyrics={onDownloadLyrics} onDownloadCover={onDownloadCover} onCheckAvailability={onCheckAvailability} onPageChange={onPageChange} onAlbumClick={onAlbumClick} onArtistClick={onArtistClick} onTrackClick={onTrackClick}/>
+        <TrackList tracks={trackList} searchQuery={searchQuery} sortBy={sortBy} selectedTracks={selectedTracks} downloadedTracks={downloadedTracks} failedTracks={failedTracks} skippedTracks={skippedTracks} currentPage={currentPage} itemsPerPage={itemsPerPage} showCheckboxes={true} hideAlbumColumn={false} folderName={playlistFolderName} downloadedLyrics={downloadedLyrics} failedLyrics={failedLyrics} skippedLyrics={skippedLyrics} downloadingLyricsTrack={downloadingLyricsTrack} checkingAvailabilityTrack={checkingAvailabilityTrack} availabilityMap={availabilityMap} downloadedCovers={downloadedCovers} failedCovers={failedCovers} skippedCovers={skippedCovers} downloadingCoverTrack={downloadingCoverTrack} onToggleTrack={onToggleTrack} onToggleSelectAll={onToggleSelectAll} onSelectTrackRange={onSelectTrackRange} onQueueTrack={onQueueTrack} onDownloadLyrics={onDownloadLyrics} onDownloadCover={onDownloadCover} onCheckAvailability={onCheckAvailability} onPageChange={onPageChange} onAlbumClick={onAlbumClick} onArtistClick={onArtistClick} onTrackClick={onTrackClick}/>
       </div>
     </div>);
 }

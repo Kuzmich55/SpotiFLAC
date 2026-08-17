@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, FileMusic, Folder, FolderOpen, Info, RefreshCw, ScanText, Square, XCircle } from "lucide-react";
+import { AlertTriangle, CircleCheckBig, CheckSquare, ChevronDown, ChevronRight, FileMusic, Folder, FolderOpen, Info, RefreshCw, ScanText, Square, XCircle } from "lucide-react";
 import { t, translateMessage } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -231,7 +231,7 @@ export function EnrichPage() {
             setPreviewLoading(false);
         }
     };
-    const statusIcon = (status: EnrichResult["status"]) => status === "enriched" ? <CheckCircle2 className="size-4 text-emerald-500"/> : status === "conflict" ? <AlertTriangle className="size-4 text-amber-500"/> : <XCircle className="size-4 text-destructive"/>;
+    const statusIcon = (status: EnrichResult["status"]) => status === "enriched" ? <CircleCheckBig className="size-4 text-emerald-500"/> : status === "conflict" ? <AlertTriangle className="size-4 text-amber-500"/> : <XCircle className="size-4 text-destructive"/>;
     const unavailableReason = (preview: MetadataPreview) => {
         if (preview.inspection_error)
             return t("translation.enrich.metadataUnreadable");
@@ -325,7 +325,7 @@ export function EnrichPage() {
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
           <div className="flex items-center justify-between gap-2 border-b bg-muted/30 p-2">
-            <div className="flex min-w-0 items-center gap-2"><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8" disabled={eligibleFiles.length === 0} onClick={() => setSelectedFiles(allSelected ? new Set() : new Set(eligibleFiles.map((file) => file.path)))}>{allSelected ? <CheckSquare className="size-4"/> : <Square className="size-4"/>}</Button></TooltipTrigger><TooltipContent>{allSelected ? t("translation.artistInfo.deselectAll") : t("translation.common.selectAll")}</TooltipContent></Tooltip><span className="truncate text-sm text-muted-foreground">{selectedEligibleFiles.length} / {eligibleFiles.length}</span></div>
+            <div className="flex min-w-0 items-center gap-2"><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" disabled={eligibleFiles.length === 0} onClick={() => setSelectedFiles(allSelected ? new Set() : new Set(eligibleFiles.map((file) => file.path)))}>{allSelected ? <CheckSquare className="size-4"/> : <Square className="size-4"/>}</Button></TooltipTrigger><TooltipContent>{allSelected ? t("translation.artistInfo.deselectAll") : t("translation.common.selectAll")}</TooltipContent></Tooltip><span className="truncate text-sm text-muted-foreground">{selectedEligibleFiles.length} / {eligibleFiles.length}</span></div>
             {scanCompleted && <span className="truncate text-xs text-muted-foreground">{t("translation.enrich.scanSummary", { value1: eligibleFiles.length, value2: unavailableFiles, value3: audioFiles.length })}</span>}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar">{loading ? <div className="flex justify-center py-8"><Spinner className="size-6"/></div> : audioFiles.length === 0 ? <div className="py-8 text-center text-muted-foreground">{t("translation.enrich.noFiles")}</div> : renderTree(allFiles)}</div>

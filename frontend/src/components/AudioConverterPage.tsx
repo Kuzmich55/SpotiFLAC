@@ -3,7 +3,7 @@ import { t, translateMessage } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem, } from "@/components/ui/toggle-group";
-import { Upload, X, CheckCircle2, AlertCircle, Trash2, FileMusic, WandSparkles, } from "lucide-react";
+import { Upload, X, CircleCheckBig, AlertCircle, Trash2, FileMusic, WandSparkles, } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { ConvertAudio, SelectAudioFiles, SelectFolder, ListAudioFilesInDir, } from "../../wailsjs/go/main/App";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
@@ -290,7 +290,7 @@ export function AudioConverterPage() {
             case "converting":
                 return <Spinner className="h-4 w-4 text-primary"/>;
             case "success":
-                return <CheckCircle2 className="h-4 w-4 text-green-500"/>;
+                return <CircleCheckBig className="h-4 w-4 text-green-500"/>;
             case "error":
                 return <AlertCircle className="h-4 w-4 text-destructive"/>;
             default:
@@ -304,15 +304,15 @@ export function AudioConverterPage() {
         <div className="flex shrink-0 items-center justify-between">
             <h1 className="text-2xl font-bold">{t("translation.common.audioConverter")}</h1>
             {files.length > 0 && (<div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleSelectFiles}>
+                <Button variant="outline" onClick={handleSelectFiles}>
                     <Upload className="h-4 w-4"/>
                     {t("translation.common.addFiles")}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleSelectFolder}>
+                <Button variant="outline" onClick={handleSelectFolder}>
                     <Upload className="h-4 w-4"/>
                     {t("translation.common.addFolder")}
                 </Button>
-                <Button variant="destructive" size="sm" onClick={clearFiles} disabled={converting}>
+                <Button variant="destructive" onClick={clearFiles} disabled={converting}>
                     <Trash2 className="h-4 w-4"/>
                     {t("translation.common.clearAll")}
                 </Button>
@@ -342,12 +342,12 @@ export function AudioConverterPage() {
                 : t("translation.migrated.AudioConverterPage.dragAndDropAudioFilesHereOr")}
                 </p>
                 <div className="flex gap-3">
-                    <Button onClick={handleSelectFiles} size="lg">
-                        <Upload className="h-5 w-5"/>
+                    <Button onClick={handleSelectFiles}>
+                        <Upload className="h-4 w-4"/>
                         {t("translation.common.selectFiles")}
                     </Button>
-                    <Button onClick={handleSelectFolder} size="lg" variant="outline">
-                        <Upload className="h-5 w-5"/>
+                    <Button onClick={handleSelectFolder} variant="outline">
+                        <Upload className="h-4 w-4"/>
                         {t("translation.common.selectFolder")}
                     </Button>
                 </div>
@@ -432,7 +432,7 @@ export function AudioConverterPage() {
                         <span className="text-xs uppercase text-muted-foreground">
                             {file.format}
                         </span>
-                        {file.status !== "converting" && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeFile(file.path)} disabled={converting}>
+                        {file.status !== "converting" && (<Button variant="ghost" size="icon" onClick={() => removeFile(file.path)} disabled={converting}>
                             <X className="h-4 w-4"/>
                         </Button>)}
                     </div>))}
@@ -440,7 +440,7 @@ export function AudioConverterPage() {
 
 
                 <div className="flex justify-center pt-4 border-t shrink-0">
-                    <Button onClick={handleConvert} disabled={converting || convertableCount === 0} size="lg">
+                    <Button onClick={handleConvert} disabled={converting || convertableCount === 0}>
                         {converting ? (<>
                             <Spinner className="h-4 w-4"/>
                             {t("translation.audioConverter.converting")}

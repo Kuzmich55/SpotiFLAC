@@ -1,51 +1,14 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 )
-
-const (
-	copilotStartURL  = "https://copilot.microsoft.com/c/api/start"
-	copilotWSURL     = "wss://copilot.microsoft.com/c/api/chat?api-version=2&clientSessionId="
-	copilotUserAgent = "CopilotNative/30.0.440505001-prod (Android 14; Google; Pixel 8 Pro)"
-	geminiURL        = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
-	geminiBuild      = "boq_assistant-bard-web-server_20260716.08_p0"
-)
-
-type copilotConversation struct {
-	CurrentConversationID string `json:"currentConversationId"`
-}
-
-type copilotEvent struct {
-	Event   string `json:"event"`
-	Text    string `json:"text"`
-	Message string `json:"message"`
-}
-
-type copilotSendEvent struct {
-	Event          string               `json:"event"`
-	Content        []copilotSendContent `json:"content"`
-	ConversationID string               `json:"conversationId"`
-	Mode           string               `json:"mode"`
-}
-
-type copilotSendContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
 
 func lyricsLanguageName(code string) string {
 	names := map[string]string{
@@ -78,98 +41,7 @@ JSON:
 %s`, lyricsLanguageName(language), input)
 }
 
-func startCopilotConversation(ctx context.Context, client *http.Client) (string, string, error) {
-	body := []byte(`{"timeZone":"Asia/Jakarta","startNewConversation":true,"teenSupportEnabled":true,"correctPersonalizationSetting":true,"deferredDataUseCapable":true}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, copilotStartURL, bytes.NewReader(body))
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", copilotUserAgent)
-	req.Header.Set("X-Search-UILang", "en-US")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-		return "", "", fmt.Errorf("Copilot start returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
-	var conversation copilotConversation
-	if err := json.NewDecoder(resp.Body).Decode(&conversation); err != nil {
-		return "", "", err
-	}
-	if conversation.CurrentConversationID == "" {
-		return "", "", fmt.Errorf("Copilot did not return a conversation ID")
-	}
-
-	cookies := make([]string, 0, len(resp.Cookies()))
-	for _, cookie := range resp.Cookies() {
-		cookies = append(cookies, cookie.Name+"="+cookie.Value)
-	}
-	return conversation.CurrentConversationID, strings.Join(cookies, "; "), nil
-}
-
-func streamCopilotTranslation(ctx context.Context, conversationID, cookie, prompt string) (string, error) {
-	headers := http.Header{
-		"User-Agent":      []string{copilotUserAgent},
-		"X-Search-UILang": []string{"en-US"},
-	}
-	if cookie != "" {
-		headers.Set("Cookie", cookie)
-	}
-
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, copilotWSURL+uuid.NewString(), headers)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetReadDeadline(deadline)
-		_ = conn.SetWriteDeadline(deadline)
-	}
-
-	var output strings.Builder
-	sent := false
-	for {
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return "", err
-		}
-		var event copilotEvent
-		if err := json.Unmarshal(data, &event); err != nil {
-			continue
-		}
-		switch event.Event {
-		case "connected":
-			if sent {
-				continue
-			}
-			sent = true
-			err = conn.WriteJSON(copilotSendEvent{
-				Event:          "send",
-				Content:        []copilotSendContent{{Type: "text", Text: prompt}},
-				ConversationID: conversationID,
-				Mode:           "smart",
-			})
-			if err != nil {
-				return "", err
-			}
-		case "appendText":
-			output.WriteString(event.Text)
-		case "error":
-			return "", fmt.Errorf("Copilot error: %s", event.Message)
-		case "done":
-			return strings.TrimSpace(output.String()), nil
-		}
-	}
-}
-
-func parseLyricsTranslation(raw string, expected map[string]string) (map[string]string, error) {
+func parseChatGPTLyricsTranslation(raw string, expected map[string]string) (map[string]string, error) {
 	cleaned := strings.TrimSpace(raw)
 	cleaned = strings.TrimPrefix(cleaned, "```json")
 	cleaned = strings.TrimPrefix(cleaned, "```")
@@ -181,47 +53,109 @@ func parseLyricsTranslation(raw string, expected map[string]string) (map[string]
 
 	var translated map[string]string
 	if err := json.Unmarshal([]byte(cleaned), &translated); err != nil {
-		return nil, fmt.Errorf("invalid Copilot JSON: %w", err)
+		return nil, fmt.Errorf("invalid ChatGPT JSON: %w", err)
 	}
 	if len(translated) != len(expected) {
-		return nil, fmt.Errorf("Copilot returned %d lines, expected %d", len(translated), len(expected))
+		return nil, fmt.Errorf("ChatGPT returned %d lines, expected %d", len(translated), len(expected))
 	}
 	for key := range expected {
 		value, ok := translated[key]
 		if !ok || strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n") {
-			return nil, fmt.Errorf("Copilot returned an invalid translation for line %s", key)
+			return nil, fmt.Errorf("ChatGPT returned an invalid translation for line %s", key)
 		}
 		translated[key] = strings.TrimSpace(value)
 	}
 	return translated, nil
 }
 
-func translateLyricsBatch(ctx context.Context, lines map[string]string, language string) (map[string]string, error) {
-	client := &http.Client{Timeout: 25 * time.Second}
+func splitLyricsTranslationLines(lines map[string]string) (map[string]string, map[string]string) {
+	keys := make([]string, 0, len(lines))
+	for key := range lines {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	middle := len(keys) / 2
+	left, right := make(map[string]string, middle), make(map[string]string, len(keys)-middle)
+	for index, key := range keys {
+		if index < middle {
+			left[key] = lines[key]
+		} else {
+			right[key] = lines[key]
+		}
+	}
+	return left, right
+}
+
+func validateCompleteTranslations(provider string, translated, expected map[string]string) error {
+	if len(translated) != len(expected) {
+		return fmt.Errorf("%s returned %d lines, expected %d", provider, len(translated), len(expected))
+	}
+	for key := range expected {
+		value, ok := translated[key]
+		if !ok || strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s returned an invalid translation for line %s", provider, key)
+		}
+	}
+	return nil
+}
+
+func mergeCompleteTranslations(provider string, expected, left, right map[string]string) (map[string]string, error) {
+	result := make(map[string]string, len(left)+len(right))
+	for key, value := range left {
+		result[key] = value
+	}
+	for key, value := range right {
+		result[key] = value
+	}
+	if err := validateCompleteTranslations(provider, result, expected); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func translateChatGPTRecursive(ctx context.Context, client *http.Client, lines map[string]string, language string) (map[string]string, error) {
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		attemptCtx, cancel := context.WithTimeout(ctx, 110*time.Second)
-		conversationID, cookie, err := startCopilotConversation(attemptCtx, client)
+	shouldSplit := false
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, lyricsTranslationAttemptTimeout)
+		raw, err := callChatGPTLyrics(attemptCtx, client, buildLyricsTranslationPrompt(lines, language))
 		if err == nil {
-			var raw string
-			raw, err = streamCopilotTranslation(attemptCtx, conversationID, cookie, buildLyricsTranslationPrompt(lines, language))
+			var result map[string]string
+			result, err = parseChatGPTLyricsTranslation(raw, lines)
 			if err == nil {
-				var result map[string]string
-				result, err = parseLyricsTranslation(raw, lines)
-				if err == nil {
-					cancel()
-					return result, nil
-				}
+				cancel()
+				return result, nil
 			}
+			shouldSplit = true
 		}
 		cancel()
 		lastErr = err
-		fmt.Printf("   Copilot lyrics translation attempt %d failed: %v\n", attempt, err)
+		fmt.Printf("   ChatGPT lyrics translation attempt %d failed: %v\n", attempt, err)
 	}
-	return nil, lastErr
+	if len(lines) == 1 || !shouldSplit {
+		return nil, lastErr
+	}
+
+	leftInput, rightInput := splitLyricsTranslationLines(lines)
+	left, leftErr := translateChatGPTRecursive(ctx, client, leftInput, language)
+	if leftErr != nil {
+		return nil, fmt.Errorf("ChatGPT left batch failed: %w", leftErr)
+	}
+	right, rightErr := translateChatGPTRecursive(ctx, client, rightInput, language)
+	if rightErr != nil {
+		return nil, fmt.Errorf("ChatGPT right batch failed: %w", rightErr)
+	}
+	return mergeCompleteTranslations("ChatGPT", lines, left, right)
 }
 
-func ApplyAITranslations(ctx context.Context, lyrics *LyricsResponse, language string) error {
+func translateChatGPTLyricsBatch(ctx context.Context, lines map[string]string, language string) (map[string]string, error) {
+	return translateChatGPTRecursive(ctx, newLyricsTranslationClient(), lines, language)
+}
+
+func ApplyChatGPTTranslations(ctx context.Context, lyrics *LyricsResponse, language string) error {
 	if lyrics == nil || len(lyrics.Lines) == 0 {
 		return fmt.Errorf("lyrics are empty")
 	}
@@ -241,8 +175,11 @@ func ApplyAITranslations(ctx context.Context, lyrics *LyricsResponse, language s
 		return fmt.Errorf("lyrics contain no translatable lines")
 	}
 
-	translated, err := translateLyricsBatch(ctx, input, language)
+	translated, err := translateChatGPTLyricsBatch(ctx, input, language)
 	if err != nil {
+		return err
+	}
+	if err := validateCompleteTranslations("ChatGPT", translated, input); err != nil {
 		return err
 	}
 	for key, value := range translated {
@@ -274,92 +211,6 @@ User:
 %sAssistant:`, lyricsLanguageName(language), marked.String())
 }
 
-func extractGeminiText(raw string) (string, error) {
-	longest := ""
-	for _, line := range strings.Split(raw, "\n") {
-		if !strings.Contains(line, `"wrb.fr"`) || len(line) < 200 {
-			continue
-		}
-		var envelope []any
-		if json.Unmarshal([]byte(line), &envelope) != nil || len(envelope) == 0 {
-			continue
-		}
-		first, ok := envelope[0].([]any)
-		if !ok || len(first) < 3 {
-			continue
-		}
-		encoded, ok := first[2].(string)
-		if !ok {
-			continue
-		}
-		var payload []any
-		if json.Unmarshal([]byte(encoded), &payload) != nil || len(payload) < 5 {
-			continue
-		}
-		parts, ok := payload[4].([]any)
-		if !ok {
-			continue
-		}
-		for _, rawPart := range parts {
-			part, ok := rawPart.([]any)
-			if !ok || len(part) < 2 {
-				continue
-			}
-			candidates, ok := part[1].([]any)
-			if !ok {
-				continue
-			}
-			for _, candidate := range candidates {
-				if text, ok := candidate.(string); ok && len(text) > len(longest) {
-					longest = text
-				}
-			}
-		}
-	}
-	if strings.TrimSpace(longest) == "" {
-		return "", fmt.Errorf("Gemini returned no text")
-	}
-	return strings.TrimSpace(longest), nil
-}
-
-func callGeminiLyrics(ctx context.Context, lines map[string]string, language string) (string, error) {
-	inner := make([]any, 102)
-	inner[0] = []any{buildGeminiLyricsPrompt(lines, language), 0, nil, nil, nil, nil, 0}
-	inner[1] = []any{"en"}
-	inner[2] = []any{"", "", "", nil, nil, nil, nil, nil, nil, ""}
-	inner[6] = []any{0}
-	inner[7], inner[10], inner[11] = 1, 1, 0
-	inner[17], inner[18], inner[27] = []any{[]any{0}}, 0, 1
-	inner[30], inner[41], inner[53] = []any{4}, []any{2}, 0
-	inner[59], inner[61], inner[68], inner[79] = uuid.NewString(), []any{}, 1, 5
-	encodedInner, _ := json.Marshal(inner)
-	fReq, _ := json.Marshal([]any{nil, string(encodedInner)})
-	body := url.Values{"f.req": []string{string(fReq)}}.Encode()
-	endpoint := fmt.Sprintf("%s?bl=%s&hl=en&_reqid=%d&rt=c", geminiURL, url.QueryEscape(geminiBuild), time.Now().UnixMilli()%1_000_000)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-	req.Header.Set("Origin", "https://gemini.google.com")
-	req.Header.Set("Referer", "https://gemini.google.com/app")
-	req.Header.Set("X-Same-Domain", "1")
-	req.Header.Set("User-Agent", copilotUserAgent)
-	resp, err := (&http.Client{Timeout: 110 * time.Second}).Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Gemini returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw[:min(len(raw), 200)])))
-	}
-	return extractGeminiText(string(raw))
-}
-
 func parseGeminiLyrics(raw string, expected map[string]string) (map[string]string, error) {
 	pattern := regexp.MustCompile(`(?m)\[\[\s*SPOTIFLAC_LINE_([0-9]+)\s*\]\]`)
 	matches := pattern.FindAllStringSubmatchIndex(raw, -1)
@@ -382,49 +233,38 @@ func parseGeminiLyrics(raw string, expected map[string]string) (map[string]strin
 	return result, nil
 }
 
-func translateGeminiRecursive(ctx context.Context, lines map[string]string, language string) (map[string]string, error) {
+func translateGeminiRecursive(ctx context.Context, client *http.Client, lines map[string]string, language string) (map[string]string, error) {
 	var lastErr error
+	shouldSplit := false
 	for attempt := 1; attempt <= 2; attempt++ {
-		raw, err := callGeminiLyrics(ctx, lines, language)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		raw, err := callGeminiLyrics(ctx, client, lines, language)
 		if err == nil {
 			if translated, parseErr := parseGeminiLyrics(raw, lines); parseErr == nil {
 				return translated, nil
 			} else {
 				err = parseErr
+				shouldSplit = true
 			}
 		}
 		lastErr = err
+		fmt.Printf("   Gemini lyrics translation attempt %d failed: %v\n", attempt, err)
 	}
-	if len(lines) == 1 {
+	if len(lines) == 1 || !shouldSplit {
 		return nil, lastErr
 	}
-	keys := make([]string, 0, len(lines))
-	for key := range lines {
-		keys = append(keys, key)
+	leftInput, rightInput := splitLyricsTranslationLines(lines)
+	left, leftErr := translateGeminiRecursive(ctx, client, leftInput, language)
+	if leftErr != nil {
+		return nil, fmt.Errorf("Gemini left batch failed: %w", leftErr)
 	}
-	sort.Strings(keys)
-	middle := len(keys) / 2
-	leftInput, rightInput := make(map[string]string), make(map[string]string)
-	for index, key := range keys {
-		if index < middle {
-			leftInput[key] = lines[key]
-		} else {
-			rightInput[key] = lines[key]
-		}
+	right, rightErr := translateGeminiRecursive(ctx, client, rightInput, language)
+	if rightErr != nil {
+		return nil, fmt.Errorf("Gemini right batch failed: %w", rightErr)
 	}
-	left, leftErr := translateGeminiRecursive(ctx, leftInput, language)
-	right, rightErr := translateGeminiRecursive(ctx, rightInput, language)
-	result := make(map[string]string)
-	for key, value := range left {
-		result[key] = value
-	}
-	for key, value := range right {
-		result[key] = value
-	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("Gemini translation failed: %v; %v", leftErr, rightErr)
-	}
-	return result, nil
+	return mergeCompleteTranslations("Gemini", lines, left, right)
 }
 
 func ApplyGeminiTranslations(ctx context.Context, lyrics *LyricsResponse, language string) error {
@@ -439,12 +279,66 @@ func ApplyGeminiTranslations(ctx context.Context, lyrics *LyricsResponse, langua
 	if len(input) == 0 {
 		return fmt.Errorf("lyrics contain no translatable lines")
 	}
-	translated, err := translateGeminiRecursive(ctx, input, language)
+	translated, err := translateGeminiRecursive(ctx, newLyricsTranslationClient(), input, language)
 	if err != nil {
+		return err
+	}
+	if err := validateCompleteTranslations("Gemini", translated, input); err != nil {
 		return err
 	}
 	for key, value := range translated {
 		lyrics.Lines[indices[key]].Translation = value
 	}
 	return nil
+}
+
+type lyricsTranslationFunc func(context.Context, *LyricsResponse, string) error
+
+func applyLyricsTranslationWithFallback(
+	ctx context.Context,
+	lyrics *LyricsResponse,
+	language string,
+	autoFallback bool,
+	primaryName string,
+	primary lyricsTranslationFunc,
+	fallbackName string,
+	fallback lyricsTranslationFunc,
+) error {
+	primaryErr := primary(ctx, lyrics, language)
+	if primaryErr == nil {
+		return nil
+	}
+	if !autoFallback || ctx.Err() != nil {
+		return fmt.Errorf("%s lyrics translation failed: %w", primaryName, primaryErr)
+	}
+
+	fmt.Printf("   %s lyrics translation failed, trying %s fallback: %v\n", primaryName, fallbackName, primaryErr)
+	if fallbackErr := fallback(ctx, lyrics, language); fallbackErr != nil {
+		return fmt.Errorf("%s lyrics translation failed: %v; %s fallback failed: %w", primaryName, primaryErr, fallbackName, fallbackErr)
+	}
+	fmt.Printf("   %s lyrics translation fallback succeeded\n", fallbackName)
+	return nil
+}
+
+func applyLyricsTranslations(
+	ctx context.Context,
+	lyrics *LyricsResponse,
+	mode string,
+	language string,
+	autoFallback bool,
+	chatGPT lyricsTranslationFunc,
+	gemini lyricsTranslationFunc,
+) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "chatgpt":
+		return applyLyricsTranslationWithFallback(ctx, lyrics, language, autoFallback, "ChatGPT", chatGPT, "Gemini", gemini)
+	case "gemini":
+		return applyLyricsTranslationWithFallback(ctx, lyrics, language, autoFallback, "Gemini", gemini, "ChatGPT", chatGPT)
+	default:
+		return nil
+	}
+}
+
+func ApplyLyricsTranslations(ctx context.Context, lyrics *LyricsResponse, mode, language string, autoFallback bool) error {
+	return applyLyricsTranslations(ctx, lyrics, mode, language, autoFallback, ApplyChatGPTTranslations, ApplyGeminiTranslations)
 }

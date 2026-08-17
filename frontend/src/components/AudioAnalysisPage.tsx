@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { Upload, ArrowLeft, Trash2, Download, FolderOpen, X, AlertCircle, CheckCircle2, FileMusic, ChevronDown, Activity, StopCircle } from "lucide-react";
+import { Upload, ArrowLeft, Trash2, Download, FolderOpen, X, AlertCircle, CircleCheckBig, FileMusic, ChevronDown, Activity, StopCircle } from "lucide-react";
 import { AudioAnalysis } from "@/components/AudioAnalysis";
 import { SpectrumVisualization, createSpectrogramDataURL, type SpectrumVisualizationHandle } from "@/components/SpectrumVisualization";
 import { useAudioAnalysis } from "@/hooks/useAudioAnalysis";
@@ -140,7 +140,7 @@ function statusIcon(status: BatchItemStatus) {
         case "analyzing":
             return <Spinner className="h-4 w-4 text-primary"/>;
         case "success":
-            return <CheckCircle2 className="h-4 w-4 text-green-500"/>;
+            return <CircleCheckBig className="h-4 w-4 text-green-500"/>;
         case "error":
             return <AlertCircle className="h-4 w-4 text-destructive"/>;
         case "pending":
@@ -676,17 +676,17 @@ export function AudioAnalysisPage({ onBack }: AudioAnalysisPageProps) {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                    {isBatchMode && isBatchRunning && (<Button onClick={handleStopBatch} variant="destructive" size="sm" disabled={isExportingBatch || isExportingSelected} className="gap-1.5">
+                    {isBatchMode && isBatchRunning && (<Button onClick={handleStopBatch} variant="destructive" disabled={isExportingBatch || isExportingSelected} className="gap-1.5">
                             <StopCircle className="h-4 w-4"/>
                             {t("translation.common.stop")}
                         </Button>)}
-                    {canResumeBatch && (<Button onClick={handleAnalyzePending} size="sm" disabled={isExportingBatch || isExportingSelected || spectrumLoading}>
+                    {canResumeBatch && (<Button onClick={handleAnalyzePending} disabled={isExportingBatch || isExportingSelected || spectrumLoading}>
                             <Activity className="h-4 w-4"/>
                             {t("translation.audioAnalysis.analyze")}
                         </Button>)}
                     {isBatchMode && (<DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" disabled={isBatchRunning || isExportingBatch || isExportingSelected}>
+                                <Button variant="outline" disabled={isBatchRunning || isExportingBatch || isExportingSelected}>
                                     <Upload className="h-4 w-4 mr-1"/>
                                     {t("translation.common.add")}
                                     <ChevronDown className="ml-1 h-4 w-4"/>
@@ -703,13 +703,13 @@ export function AudioAnalysisPage({ onBack }: AudioAnalysisPageProps) {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>)}
-                    {showSingleModeActions && (<Button onClick={handleExportSelected} variant="outline" size="sm" disabled={isExportingSelected || spectrumLoading}>
+                    {showSingleModeActions && (<Button onClick={handleExportSelected} variant="outline" disabled={isExportingSelected || spectrumLoading}>
                             <Download className="h-4 w-4 mr-1"/>
                             {isExportingSelected ? t("translation.migrated.AudioAnalysisPage.exporting") : t("translation.migrated.AudioAnalysisPage.exportPNG")}
                         </Button>)}
                     {isBatchMode && (<DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm" disabled={successItems.length === 0 || isExportingBatch || isExportingSelected || isBatchRunning || spectrumLoading}>
+                                <Button variant="outline" disabled={successItems.length === 0 || isExportingBatch || isExportingSelected || isBatchRunning || spectrumLoading}>
                                     <Download className="h-4 w-4 mr-1"/>
                                     {isExportingBatch ? t("translation.migrated.AudioAnalysisPage.exporting") : isExportingSelected ? t("translation.migrated.AudioAnalysisPage.exporting") : t("translation.migrated.AudioAnalysisPage.export")}
                                     <ChevronDown className="ml-1 h-4 w-4"/>
@@ -726,11 +726,11 @@ export function AudioAnalysisPage({ onBack }: AudioAnalysisPageProps) {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>)}
-                    {showSingleModeActions && (<Button onClick={handleClearAll} variant="destructive" size="sm" disabled={isExportingSelected}>
+                    {showSingleModeActions && (<Button onClick={handleClearAll} variant="destructive" disabled={isExportingSelected}>
                             <Trash2 className="h-4 w-4 mr-1"/>
                             {t("translation.common.clear")}
                         </Button>)}
-                    {isBatchMode && (<Button onClick={handleClearAll} variant="destructive" size="sm" disabled={isExportingBatch || isExportingSelected}>
+                    {isBatchMode && (<Button onClick={handleClearAll} variant="destructive" disabled={isExportingBatch || isExportingSelected}>
                             <Trash2 className="h-4 w-4 mr-1"/>
                             {t("translation.common.clear")}
                         </Button>)}
@@ -753,12 +753,12 @@ export function AudioAnalysisPage({ onBack }: AudioAnalysisPageProps) {
                 : t("translation.migrated.AudioAnalysisPage.dragAndDropAudioFilesHereOr")}
                     </p>
                     <div className="flex gap-3">
-                        <Button onClick={handleSelectFiles} size="lg">
-                            <Upload className="h-5 w-5"/>
+                        <Button onClick={handleSelectFiles}>
+                            <Upload className="h-4 w-4"/>
                             {t("translation.common.selectFiles")}
                         </Button>
-                        <Button onClick={handleSelectFolder} size="lg" variant="outline">
-                            <Upload className="h-5 w-5"/>
+                        <Button onClick={handleSelectFolder} variant="outline">
+                            <Upload className="h-4 w-4"/>
                             {t("translation.common.selectFolder")}
                         </Button>
                     </div>
@@ -809,7 +809,7 @@ export function AudioAnalysisPage({ onBack }: AudioAnalysisPageProps) {
                                                 <span>{fileNameFromPath(item.path).split(".").pop()?.toUpperCase() || t("translation.audioAnalysis.audio")}</span>
                                             </div>
                                         </div>
-                                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={(event) => {
+                                        <Button type="button" variant="ghost" size="icon" className="shrink-0" onClick={(event) => {
                         event.stopPropagation();
                         handleRemoveItem(item.id);
                     }} disabled={isBatchRunning || isExportingBatch || isExportingSelected || spectrumLoading}>

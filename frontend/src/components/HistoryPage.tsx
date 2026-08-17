@@ -1,8 +1,7 @@
 import { t } from "@/i18n";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Trash2, ExternalLink, Search, ArrowUpDown, History, Play, Pause, Database, CloudUpload, Music2, Disc3, ListMusic, UserRound } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Trash2, ExternalLink, Search, ArrowUpDown, History, Play, Pause, Database, CloudUpload, CloudDownload, Download, Music2, Disc3, ListMusic, UserRound } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -143,16 +142,24 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
         }
     };
     useEffect(() => {
-        if (activeTab === "downloads") {
-            fetchDownloadHistory();
-            const interval = setInterval(fetchDownloadHistory, 5000);
-            return () => clearInterval(interval);
-        }
-        else {
-            fetchFetchHistory();
-            const interval = setInterval(fetchFetchHistory, 5000);
-            return () => clearInterval(interval);
-        }
+        const loadAll = () => {
+            void fetchDownloadHistory();
+            void fetchFetchHistory();
+        };
+        const pollActive = () => {
+            if (activeTab === "downloads") {
+                void fetchDownloadHistory();
+            }
+            else {
+                void fetchFetchHistory();
+            }
+        };
+        const initialTimer = window.setTimeout(loadAll, 0);
+        const interval = window.setInterval(pollActive, 5000);
+        return () => {
+            window.clearTimeout(initialTimer);
+            window.clearInterval(interval);
+        };
     }, [activeTab]);
     useEffect(() => {
         return () => {
@@ -211,6 +218,12 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
     useEffect(() => {
         setFetchCurrentPage(1);
     }, [fetchSearchQuery, activeFetchTab]);
+    const fetchTypeTotals = {
+        track: fetchHistory.filter((item) => item.type.toLowerCase() === "track").length,
+        album: fetchHistory.filter((item) => item.type.toLowerCase() === "album").length,
+        artist: fetchHistory.filter((item) => item.type.toLowerCase() === "artist").length,
+        playlist: fetchHistory.filter((item) => item.type.toLowerCase() === "playlist").length,
+    };
     const handlePreview = async (id: string, spotifyId: string) => {
         if (playingPreviewId === id) {
             playbackRef.current?.destroy();
@@ -300,20 +313,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
         const startIndex = (downloadCurrentPage - 1) * ITEMS_PER_PAGE;
         const paginated = filteredDownloadHistory.slice(startIndex, startIndex + ITEMS_PER_PAGE);
         return (<div className="space-y-6">
-                <div className="flex flex-col gap-4">
-                     <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                             <h2 className="text-xl font-bold tracking-tight">{t("translation.history.downloads")}</h2>
-                             {filteredDownloadHistory.length > 0 && (<Badge variant="secondary" className="font-mono">
-                                    {filteredDownloadHistory.length.toLocaleString('en-US')}
-                                </Badge>)}
-                        </div>
-                        <Button variant="destructive" size="sm" onClick={() => setShowClearDownloadConfirm(true)} disabled={downloadHistory.length === 0} className="cursor-pointer gap-2">
-                             <Trash2 className="h-4 w-4"/> {t("translation.common.clearAll")}
-                        </Button>
-                    </div>
-
-                     <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
                         <div className="relative flex-1">
                             <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground"/>
                             <Input placeholder={t("translation.history.searchDownloads")} value={downloadSearchQuery} onChange={(e) => setDownloadSearchQuery(e.target.value)} className="pl-8 h-9"/>
@@ -335,7 +335,9 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                 <SelectItem value="duration_desc">{t("translation.common.durationLong")}</SelectItem>
                             </SelectContent>
                         </Select>
-                    </div>
+                        <Button variant="destructive" onClick={() => setShowClearDownloadConfirm(true)} disabled={downloadHistory.length === 0} className="cursor-pointer gap-2">
+                            <Trash2 className="h-4 w-4"/> {t("translation.common.clearAll")}
+                        </Button>
                 </div>
 
                  <div className="rounded-md border overflow-hidden">
@@ -415,7 +417,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                                 {!(item.spotify_id?.startsWith('tidal_') || item.spotify_id?.startsWith('qobuz_') || item.spotify_id?.startsWith('amazon_') || item.spotify_id?.startsWith('deezer_')) && (<TooltipProvider>
                                                         <Tooltip delayDuration={0}>
                                                             <TooltipTrigger asChild>
-                                                                <Button variant="ghost" size="icon" className="h-8 w-8 cursor-pointer" onClick={() => handlePreview(item.id, item.spotify_id)} disabled={!item.spotify_id}>
+                                                                <Button variant="ghost" size="icon" className="cursor-pointer" onClick={() => handlePreview(item.id, item.spotify_id)} disabled={!item.spotify_id}>
                                                                     {playingPreviewId === item.id ? <Pause className="h-4 w-4"/> : <Play className="h-4 w-4"/>}
                                                                 </Button>
                                                             </TooltipTrigger>
@@ -428,7 +430,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                                 <TooltipProvider>
                                                     <Tooltip delayDuration={0}>
                                                         <TooltipTrigger asChild>
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8 cursor-pointer" onClick={() => openExternal(getTrackLink(item.spotify_id).url)}>
+                                                            <Button variant="ghost" size="icon" className="cursor-pointer" onClick={() => openExternal(getTrackLink(item.spotify_id).url)}>
                                                                 <ExternalLink className="h-4 w-4"/>
                                                             </Button>
                                                         </TooltipTrigger>
@@ -441,7 +443,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                                 <TooltipProvider>
                                                     <Tooltip delayDuration={0}>
                                                         <TooltipTrigger asChild>
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8 cursor-pointer text-destructive hover:text-destructive" onClick={() => handleDeleteDownloadItem(item.id)}>
+                                                            <Button variant="ghost" size="icon" className="cursor-pointer text-destructive hover:text-destructive" onClick={() => handleDeleteDownloadItem(item.id)}>
                                                                 <Trash2 className="h-4 w-4"/>
                                                             </Button>
                                                         </TooltipTrigger>
@@ -495,36 +497,26 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
         const paginated = filteredFetchHistory.slice(startIndex, startIndex + ITEMS_PER_PAGE);
         return (<div className="space-y-6">
                 <div className="flex flex-col gap-4">
-                     <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                             <h2 className="text-xl font-bold tracking-tight">{t("translation.history.fetches")}</h2>
-                             {fetchHistory.length > 0 && (<Badge variant="secondary" className="font-mono">
-                                    {fetchHistory.length.toLocaleString('en-US')}
-                                </Badge>)}
-                        </div>
-                        <Button variant="destructive" size="sm" onClick={() => setShowClearFetchConfirm(true)} disabled={fetchHistory.length === 0} className="cursor-pointer gap-2">
-                             <Trash2 className="h-4 w-4"/> {t("translation.common.clearAll")}
-                        </Button>
-                    </div>
-
-                    
-                    <div className="flex flex-col gap-4">
                         <div className="flex gap-2 border-b shrink-0">
                             <Button variant={activeFetchTab === "track" ? "default" : "ghost"} size="sm" onClick={() => setActiveFetchTab("track")} className="rounded-b-none">
                                 <Music2 className="h-4 w-4"/>
                                 {t("translation.common.tracks")}
+                                {fetchTypeTotals.track > 0 && (<span className={`font-mono text-xs ${activeFetchTab === "track" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{fetchTypeTotals.track.toLocaleString("en-US")}</span>)}
                             </Button>
                             <Button variant={activeFetchTab === "album" ? "default" : "ghost"} size="sm" onClick={() => setActiveFetchTab("album")} className="rounded-b-none">
                                 <Disc3 className="h-4 w-4"/>
                                 {t("translation.common.albums")}
+                                {fetchTypeTotals.album > 0 && (<span className={`font-mono text-xs ${activeFetchTab === "album" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{fetchTypeTotals.album.toLocaleString("en-US")}</span>)}
                             </Button>
                             <Button variant={activeFetchTab === "playlist" ? "default" : "ghost"} size="sm" onClick={() => setActiveFetchTab("playlist")} className="rounded-b-none">
                                 <ListMusic className="h-4 w-4"/>
                                 {t("translation.common.playlists")}
+                                {fetchTypeTotals.playlist > 0 && (<span className={`font-mono text-xs ${activeFetchTab === "playlist" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{fetchTypeTotals.playlist.toLocaleString("en-US")}</span>)}
                             </Button>
                             <Button variant={activeFetchTab === "artist" ? "default" : "ghost"} size="sm" onClick={() => setActiveFetchTab("artist")} className="rounded-b-none">
                                 <UserRound className="h-4 w-4"/>
                                 {t("translation.common.artists")}
+                                {fetchTypeTotals.artist > 0 && (<span className={`font-mono text-xs ${activeFetchTab === "artist" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{fetchTypeTotals.artist.toLocaleString("en-US")}</span>)}
                             </Button>
                         </div>
 
@@ -533,8 +525,10 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground"/>
                                 <Input placeholder={t("translation.history.searchFetchHistory")} value={fetchSearchQuery} onChange={(e) => setFetchSearchQuery(e.target.value)} className="pl-8 h-9"/>
                             </div>
+                            <Button variant="destructive" onClick={() => setShowClearFetchConfirm(true)} disabled={fetchHistory.length === 0} className="cursor-pointer gap-2">
+                                <Trash2 className="h-4 w-4"/> {t("translation.common.clearAll")}
+                            </Button>
                         </div>
-                    </div>
                 </div>
 
                 <div className="rounded-md border overflow-hidden">
@@ -588,7 +582,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                                 <TooltipProvider>
                                                     <Tooltip delayDuration={0}>
                                                         <TooltipTrigger asChild>
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8 cursor-pointer" onClick={() => onHistorySelect?.(item.data)}>
+                                                            <Button variant="ghost" size="icon" className="cursor-pointer" onClick={() => onHistorySelect?.(item.data)}>
                                                                 <CloudUpload className="h-4 w-4"/>
                                                             </Button>
                                                         </TooltipTrigger>
@@ -601,7 +595,7 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
                                                 <TooltipProvider>
                                                     <Tooltip delayDuration={0}>
                                                         <TooltipTrigger asChild>
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8 cursor-pointer text-destructive hover:text-destructive" onClick={(e) => handleDeleteFetchItem(item.id, e)}>
+                                                            <Button variant="ghost" size="icon" className="cursor-pointer text-destructive hover:text-destructive" onClick={(e) => handleDeleteFetchItem(item.id, e)}>
                                                                 <Trash2 className="h-4 w-4"/>
                                                             </Button>
                                                         </TooltipTrigger>
@@ -656,11 +650,15 @@ export function HistoryPage({ onHistorySelect }: HistoryPageProps) {
 
             <div className="border-b">
                 <div className="flex gap-6">
-                    <button onClick={() => setActiveTab("downloads")} className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px hover:text-foreground ${activeTab === "downloads" ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}>
+                    <button onClick={() => setActiveTab("downloads")} className={`-mb-px inline-flex items-center gap-2 border-b-2 pb-3 text-sm font-medium transition-colors hover:text-foreground ${activeTab === "downloads" ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}>
+                        <Download className="h-4 w-4"/>
                         {t("translation.history.downloads")}
+                        {filteredDownloadHistory.length > 0 && (<span className="font-mono text-xs text-muted-foreground">{filteredDownloadHistory.length.toLocaleString('en-US')}</span>)}
                     </button>
-                    <button onClick={() => setActiveTab("fetches")} className={`pb-3 text-sm font-medium transition-colors border-b-2 -mb-px hover:text-foreground ${activeTab === "fetches" ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}>
+                    <button onClick={() => setActiveTab("fetches")} className={`-mb-px inline-flex items-center gap-2 border-b-2 pb-3 text-sm font-medium transition-colors hover:text-foreground ${activeTab === "fetches" ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}>
+                        <CloudDownload className="h-4 w-4"/>
                         {t("translation.history.fetches")}
+                        {fetchHistory.length > 0 && (<span className="font-mono text-xs text-muted-foreground">{fetchHistory.length.toLocaleString('en-US')}</span>)}
                     </button>
                 </div>
             </div>

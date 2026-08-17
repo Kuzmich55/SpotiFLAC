@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { InputWithContext } from "@/components/ui/input-with-context";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FolderOpen, RefreshCw, FileMusic, ChevronRight, ChevronDown, Pencil, Eye, Folder, Info, FileText, Image, Copy, Check, CheckSquare, Square, } from "lucide-react";
+import { FolderOpen, RefreshCw, FileMusic, ChevronRight, ChevronDown, Pencil, Eye, Folder, Info, FileText, Image, Copy, CircleCheck, CheckSquare, Square, } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
@@ -539,7 +539,7 @@ export function FileManagerPage() {
         <div className="flex items-center gap-2 min-w-0">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={allSelected ? deselectAll : selectAll}>
+              <Button variant="ghost" size="icon" onClick={allSelected ? deselectAll : selectAll}>
                 {allSelected ? <CheckSquare className="h-4 w-4"/> : <Square className="h-4 w-4"/>}
               </Button>
             </TooltipTrigger>
@@ -550,7 +550,7 @@ export function FileManagerPage() {
         <div className="flex items-center gap-1 shrink-0">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handlePreview(true)} disabled={selectedFiles.size === 0 || loading}>
+              <Button variant="outline" size="icon" onClick={() => handlePreview(true)} disabled={selectedFiles.size === 0 || loading}>
                 <Eye className="h-4 w-4"/>
               </Button>
             </TooltipTrigger>
@@ -558,7 +558,7 @@ export function FileManagerPage() {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button size="icon" className="h-8 w-8" onClick={() => handlePreview(false)} disabled={selectedFiles.size === 0 || loading}>
+              <Button size="icon" onClick={() => handlePreview(false)} disabled={selectedFiles.size === 0 || loading}>
                 <Pencil className="h-4 w-4"/>
               </Button>
             </TooltipTrigger>
@@ -588,15 +588,18 @@ export function FileManagerPage() {
     <div className="flex gap-2 border-b shrink-0">
       <Button variant={activeTab === "track" ? "default" : "ghost"} size="sm" onClick={() => setActiveTab("track")} className="rounded-b-none">
         <FileMusic className="h-4 w-4"/>
-        {t("translation.fileManager.track")}{allAudioFiles.length})
+        {t("translation.fileManager.track")}
+        {allAudioFiles.length > 0 && (<span className={`font-mono text-xs ${activeTab === "track" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{allAudioFiles.length.toLocaleString("en-US")}</span>)}
       </Button>
       <Button variant={activeTab === "lyric" ? "default" : "ghost"} size="sm" onClick={() => setActiveTab("lyric")} className="rounded-b-none">
         <FileText className="h-4 w-4"/>
-        {t("translation.fileManager.lyric")}{allLyricFiles.length})
+        {t("translation.fileManager.lyric")}
+        {allLyricFiles.length > 0 && (<span className={`font-mono text-xs ${activeTab === "lyric" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{allLyricFiles.length.toLocaleString("en-US")}</span>)}
       </Button>
       <Button variant={activeTab === "cover" ? "default" : "ghost"} size="sm" onClick={() => setActiveTab("cover")} className="rounded-b-none">
         <Image className="h-4 w-4"/>
-        {t("translation.fileManager.cover")}{allCoverFiles.length})
+        {t("translation.fileManager.cover")}
+        {allCoverFiles.length > 0 && (<span className={`font-mono text-xs ${activeTab === "cover" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{allCoverFiles.length.toLocaleString("en-US")}</span>)}
       </Button>
     </div>
 
@@ -683,7 +686,7 @@ export function FileManagerPage() {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={handleCopyLyrics} className="gap-1.5">
-            {copySuccess ? <Check className="h-4 w-4"/> : <Copy className="h-4 w-4"/>}
+            {copySuccess ? <CircleCheck className="h-4 w-4"/> : <Copy className="h-4 w-4"/>}
             {t("translation.common.copy")}
           </Button>
           <Button onClick={() => setShowLyricsPreview(false)}>{t("translation.common.close")}</Button>

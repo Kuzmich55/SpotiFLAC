@@ -2,12 +2,10 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { BrowserOpenURL } from "../../wailsjs/runtime/runtime";
 import type { Settings } from "./settings";
+import { sanitizePath } from "./path-sanitizer";
+export { sanitizePath } from "./path-sanitizer";
 export function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
-}
-export function sanitizePath(input: string, _os: string): string {
-    const sanitized = input.trim();
-    return sanitized.replace(/[<>:"/\\|?*]/g, "_");
 }
 export function joinPath(os: string, ...parts: string[]): string {
     const sep = os === "Windows" ? "\\" : "/";

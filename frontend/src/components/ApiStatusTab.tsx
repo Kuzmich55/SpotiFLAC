@@ -1,7 +1,7 @@
 import { t } from "@/i18n";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { PlugZap, CheckCircle2, Loader2, Wrench, Server, Clock3 } from "lucide-react";
+import { PlugZap, CircleCheckBig, Loader2, Wrench, Server, Clock3 } from "lucide-react";
 import { TidalIcon, QobuzIcon, AmazonIcon, DeezerIcon } from "./PlatformIcons";
 import { useApiStatus } from "@/hooks/useApiStatus";
 import { SPOTIFLAC_NEXT_SOURCES } from "@/lib/api-status";
@@ -31,7 +31,7 @@ function renderBreakInfo(status: CommunityBreakStatus | undefined, loading: bool
 }
 function renderStatusIndicator(status: "checking" | "online" | "offline" | "idle") {
     if (status === "online") {
-        return <CheckCircle2 className="h-5 w-5 text-emerald-500"/>;
+        return <CircleCheckBig className="h-5 w-5 text-emerald-500"/>;
     }
     if (status === "offline") {
         return <Wrench className="h-4 w-4 text-amber-600 dark:text-amber-400"/>;
@@ -82,11 +82,11 @@ export function ApiStatusTab() {
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold tracking-tight">SpotiFLAC</h3>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => openExternal("https://spotbye.qzz.io")} className="gap-2">
+            <Button variant="outline" onClick={() => openExternal("https://spotbye.qzz.io")} className="gap-2">
               <Server className="h-4 w-4"/>
               {t("translation.common.details")}
             </Button>
-            <Button variant="outline" size="sm" onClick={checkAll} disabled={isChecking || isCheckingBreaks} className="gap-2">
+            <Button variant="outline" onClick={checkAll} disabled={isChecking || isCheckingBreaks} className="gap-2">
               {isChecking || isCheckingBreaks ? <Loader2 className="h-4 w-4 animate-spin"/> : <PlugZap className="h-4 w-4"/>}
               {t("translation.common.check")}
             </Button>
